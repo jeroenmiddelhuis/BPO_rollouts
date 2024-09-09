@@ -80,7 +80,7 @@ class MDP:
 
         p_arrival = (self.arrivals_coming() * 0.5) / sum_of_rates
         p_r1a_completion = (1/1.8 * intermediate_state[2]) / sum_of_rates
-        p_r2a_completion = (1/10 * intermediate_state[3]) / sum_of_rates  
+        p_r2a_completion = (1/10 * intermediate_state[3]) / sum_of_rates
         if PRINT_TRAJECTORY: print('pre probabilities', p_arrival, p_r1a_completion, p_r2a_completion)
 
         expected_event_time = 1 / sum_of_rates
@@ -118,7 +118,7 @@ class MDP:
             # an arrival, r1 processing the task or r2 processing the task
             # the probability of one of these evolutions happening is proportional to the rate of that evolution.
             if sum_of_rates == 0:
-                return self.observation(), expected_reward, self.is_done(), False, None
+                return self.observation(), 0, self.is_done(), False, None
             else:
                 if evolution == 'arrival':
                     self.waiting_cases.append(self.total_arrivals)

@@ -13,7 +13,7 @@ def learn(bootstrap_policy, filename_without_extension, learning_iterations=3, e
         print("Policy verion " + str(i) + " learned, now testing")
         print(rollouts.evaluate_policy(env, pl.policy, nr_rollouts))
         if i < learning_iterations:
-            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant)
+            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
 
 
 def show_policy(filename):
@@ -59,7 +59,11 @@ def compare_all_states(filename, episode_length=10, nr_rollouts=100):
             print(observation, mask, action_policy, action_threshold)
 
 
-learn(smdp.random_policy, "./models/policy.random", episode_length=20, learning_iterations=20)
-show_policy("./models/policy.random.v20.keras")
-evaluate_policy("./models/policy.random.v20.keras", episode_length=20)
-compare_all_states("./models/policy.random.v20.keras", episode_length=20)
+# learn(smdp.random_policy, "./models/policy_smdp.random", episode_length=50, learning_iterations=40)
+# show_policy("./models/policy_smdp.random.v40.keras")
+# evaluate_policy("./models/policy_smdp.random.v40.keras", episode_length=50, nr_rollouts=1000)
+# compare_all_states("./models/policy_smdp.random.v40.keras", episode_length=50)
+
+#show_policy("./models/policy_mdp.random_mdp.v39.keras")
+evaluate_policy("./models/policy_mdp.random_mdp.v39.keras", episode_length=50, nr_rollouts=3000)
+#compare_all_states("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)

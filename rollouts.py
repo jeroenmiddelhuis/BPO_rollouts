@@ -131,7 +131,7 @@ def random_states(env, policy, nr_states):
     return sampled_states
 
 
-def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_action_per_state=50, only_statistically_significant=False):
+def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_action_per_state=50, only_statistically_significant=False, learner=None):
     """
     Does one iteration of learning. In the following steps:
     1. Samples start states.
@@ -154,8 +154,11 @@ def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_actio
     if only_statistically_significant:
         print("If the number of learning samples if low, you might want to increase the number of rollouts per action per state, to get more significantly better actions.")
     # now we have the learning samples, let's train a new policy.
-    learner = PolicyLearner()
-    learner.build_model(learning_samples_X, learning_samples_y)
+    if learner == None:
+        learner = PolicyLearner()
+        learner.build_model(learning_samples_X, learning_samples_y)
+    else:
+        learner.update_model(learning_samples_X, learning_samples_y)
     return learner
 
 

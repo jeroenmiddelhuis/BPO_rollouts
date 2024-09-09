@@ -53,6 +53,8 @@ class SMDP:
         return smdp
 
     def step(self, action):
+        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + len(self.waiting_cases)
+        
         # process the action, 'postpone' and 'do nothing', do nothing to the state.
         if action[0]:  # (r1, a)
             self.processing_r1.append(self.waiting_cases.pop(0))
@@ -93,7 +95,7 @@ class SMDP:
                 case_id = self.processing_r2.pop(0)
                 if self.reporter is not None:
                     self.reporter.callback(case_id, 'a', '<task:complete>', self.total_time, 'r2')
-            reward = -time
+            reward = -time*nr_active_cases
             return self.observation(), reward, self.is_done(), False, None         
 
     def arrivals_coming(self):
@@ -137,7 +139,7 @@ def epsilon_greedy_policy(env):
     else:
         return env.greedy_policy()
 
-def threshold_policy(env, observation=None, action_mask=None):
+def threshold_policy(env, observation=None, action_mask=None, threshold=5):
     if action_mask is None and observation is None:  # this is mainly for testing purposes
         observation = env.observation()
         action_mask = env.action_mask()
@@ -145,7 +147,7 @@ def threshold_policy(env, observation=None, action_mask=None):
     action_index = min([i for i in range(len(action_mask)) if action_mask[i]])
     action[action_index] = 1
     if action_index == 1:  # if we are assigning r2, but there are few cases waiting, it may be better to postpone
-        if observation[4] < 5 and action_mask[2]:  # but note that this is only allowed if we can postpone
+        if observation[4] < threshold and action_mask[2]:  # but note that this is only allowed if we can postpone
             action = [0, 0, 1, 0]
     return action
 

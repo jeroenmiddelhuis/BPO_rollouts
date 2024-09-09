@@ -31,6 +31,14 @@ class PolicyLearner:
         self.model.compile(optimizer='adam', loss='categorical_crossentropy')
         self.model.fit(observations, actions, epochs=25)
 
+    def update_model(self, observations, actions):
+        observations = np.array(observations)
+        actions = np.array(actions)
+
+        # Continue training the existing model with new data
+        self.model.fit(observations, actions, epochs=25)
+
+
     def predict(self, observation, action_mask):
         observation = np.array(observation)
         observation = observation.reshape(1, -1)
