@@ -14,24 +14,45 @@ class PolicyLearner:
         self.cache_misses = 0
         self.cache_evictions = 0
 
+
     def build_model(self, observations, actions):
         input_dim = len(observations[0])
         output_dim = len(actions[0])
 
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Dense(64, activation='relu', input_shape=(input_dim,)),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(output_dim, activation='softmax')
-        ])
+        inputs = tf.keras.Input(shape=(input_dim,))
+        x = tf.keras.layers.Dense(64, activation='relu')(inputs)
+        x = tf.keras.layers.Dense(64, activation='relu')(x)
+        outputs = tf.keras.layers.Dense(output_dim, activation='softmax')(x)
 
-        observations = np.array(observations)
-        actions = np.array(actions)
+        self.model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
-        # Train the model
-        self.model.compile(optimizer='adam', loss='categorical_crossentropy')
-        self.model.fit(observations, actions, epochs=25)
+        # Compile the model
+        self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    # def build_model(self, observations, actions):
+    #     input_dim = len(observations[0])
+    #     output_dim = len(actions[0])
+
+    #     self.model = tf.keras.Sequential([
+    #         tf.keras.layers.Dense(64, activation='relu', input_shape=(input_dim,)),
+    #         tf.keras.layers.Dense(64, activation='relu'),
+    #         tf.keras.layers.Dense(output_dim, activation='softmax')
+    #     ])
+
+    #     observations = np.array(observations)
+    #     actions = np.array(actions)
+
+    #     # Train the model
+    #     self.model.compile(optimizer='adam', loss='categorical_crossentropy')
+    #     self.model.fit(observations, actions, epochs=25)
 
     def update_model(self, observations, actions):
+        # Reset the cache to evict old entries
+        self.cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.cache_evictions = 0
+        
         observations = np.array(observations)
         actions = np.array(actions)
 

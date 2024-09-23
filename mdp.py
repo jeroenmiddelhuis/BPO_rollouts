@@ -1,10 +1,12 @@
 from reporters import EventLogReporter
 from crn import CRN
+import sys, os, json
+import numpy as np
 
 PRINT_TRAJECTORY = False
 
 class MDP:
-    def __init__(self, nr_arrivals, tau=0.5, reporter=None, crn=None):
+    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None, crn=None):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -16,12 +18,36 @@ class MDP:
         reset, step, action_mask, is_done
         We use a common random numbers generator, which allows us to do repeat a rollout with the same random numbers. This has been shown to help with learning and is usful for testing.
         """
-        self.waiting_cases = []
+        # Read the config file and set the process parameters
+        self.config_type = config_type
+        with open(os.path.join(sys.path[0], "config.txt"), "r") as f:
+            data = f.read()
+        
+        config = json.loads(data)
+        config = config[config_type]
+        
+        self.task_types = [task for task in list(config['task_types']) if task != 'Start']
+        self.task_types_all = [task for task in list(config['task_types'])] + ['Complete']
+        self.resources = sorted(list(config['resources']))
+        self.resource_pools = config['resource_pools']
+
+        self.arrival_rate = 1/config['mean_interarrival_time']
+
+        self.transitions = config['transitions']
+
+        self.state_space = [resource + '_available' for resource in self.resources] +\
+                           [resource + '_assigned' for resource in self.resources] +\
+                           [task + '_queue' for task in self.task_types]
+        self.action_space = [resource+task for resource in self.resources for task in self.task_types if resource in self.resource_pools[task] if task != 'Start'] + ['postpone'] + ['do_nothing']
+        self.waiting_cases = {task: [] for task in self.task_types}
+        self.completed_cases = []
+
         self.processing_r1 = []
         self.processing_r2 = []
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = nr_arrivals
+        self.original_nr_arrivals = nr_arrivals
         self.tau = tau
         if crn is None:
             crn = CRN()
@@ -29,20 +55,38 @@ class MDP:
         self.reporter = reporter
 
     def observation(self):
-        return [1-len(self.processing_r1), 1-len(self.processing_r2), len(self.processing_r1), len(self.processing_r2), len(self.waiting_cases)]
+        # TODO change the state based on the number of resoruces and activites.
+        # TODO self.processing_r1 and r2 and be more than 1 if we have multiple activities
+        # TODO normalization of the observation
 
+        is_processing_r1 = 1 if len(self.processing_r1) > 0 else 0
+        is_processing_r2 = 1 if len(self.processing_r2) > 0 else 0
+        if is_processing_r1:
+            assigned_r1 = 1 if self.processing_r1[-1][1] == 'a' else 2 if self.processing_r1[-1][1] == 'b' else 0
+        else:
+            assigned_r1 = 0
+        if is_processing_r2:
+            assigned_r2 = 1 if self.processing_r2[-1][1] == 'a' else 2 if self.processing_r2[-1][1] == 'b' else 0
+        else:
+            assigned_r2 = 0
+        waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
+        return [1-is_processing_r1, 1-is_processing_r2, assigned_r1, assigned_r2] + waiting_cases
+    
     def reset(self):
-        self.waiting_cases = []
+        self.waiting_cases = {task: [] for task in self.task_types}
+        self.completed_cases = []
         self.processing_r1 = []
         self.processing_r2 = []
         self.total_time = 0
-        self.total_arrivals = 0
+        self.total_arrivals = 0 
+        self.nr_arrivals = self.original_nr_arrivals
     
-    def get_state(self):
-        return (self.waiting_cases.copy(), self.processing_r1.copy(), self.processing_r2.copy(), self.total_time, self.total_arrivals, self.nr_arrivals)
+    def get_state(self, rollout=False):
+        nr_arrivals = self.nr_arrivals if not rollout else self.nr_arrivals + self.total_arrivals
+        return ({task: cases.copy() for task, cases in self.waiting_cases.items()}, self.processing_r1.copy(), self.processing_r2.copy(), self.total_time, self.total_arrivals, nr_arrivals)
     
     def set_state(self, state):
-        self.waiting_cases = state[0].copy()
+        self.waiting_cases = {task: cases.copy() for task, cases in state[0].items()}
         self.processing_r1 = state[1].copy()
         self.processing_r2 = state[2].copy()
         self.total_time = state[3]
@@ -54,61 +98,99 @@ class MDP:
         smdp.set_state(state)
         return smdp
 
+    def sample_next_task(self, current_task):
+        # Calculate the sum of the values
+        p_transitions = self.transitions[current_task]
+        total_sum = sum(p_transitions)
+        
+        # Check if the sum is approximately 1 or less, considering rounding errors
+        if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
+            # Draw a random sample using the crn class
+            return self.crn.choice(self.task_types_all, weights=p_transitions)
+        else:
+            # Check if all nonzero values are equal to 1
+            nonzero_indices = [index for index, value in enumerate(p_transitions) if value != 0]
+            if any(p_transitions[index] != 1 for index in nonzero_indices):
+                raise ValueError("All nonzero values must be equal to 1 when using parallism.")
+            # Return the indices of the list that contain a nonzero value
+            return [self.task_types_all[index] for index in nonzero_indices]
+
     def step(self, action):
-        intermediate_state = self.observation() # Pointer or object?
-        if PRINT_TRAJECTORY: print('intermediate state', intermediate_state)
+        action = self.action_space[action.index(1)]
+        if PRINT_TRAJECTORY: print("Obseration:", self.observation(), 'Action:', action)
         # create an intermediate state to calculate the expected reward and the next state
         # we use this state to calculate if the state actually transitions to the next state
         # or if the state remains the same. In latter, no resources are added/removed.
-        if action[0]: # (r1, a)
-            intermediate_state[0] = intermediate_state[0] - 1
-            intermediate_state[2] = intermediate_state[2] + 1
-            intermediate_state[4] = intermediate_state[4] - 1
-        if action[1]: # (r2, a)
-            intermediate_state[1] = intermediate_state[1] - 1
-            intermediate_state[3] = intermediate_state[3] + 1
-            intermediate_state[4] = intermediate_state[4] - 1
-        if PRINT_TRAJECTORY: print(action)
-        if PRINT_TRAJECTORY: print('post action state', intermediate_state)
+        evolutions = {}
+        # add possible evolution based on action 
+        if action == 'r1a': # (r1, a)
+            evolutions['r1a'] = 1/self.resource_pools['a']['r1'][0]
+        elif action == 'r2a': # (r2, a)
+            evolutions['r2a'] = 1/self.resource_pools['a']['r2'][0]
+        elif action == 'r1b': # (r1, b)
+            evolutions['r1b'] = 1/self.resource_pools['b']['r1'][0]
+        elif action == 'r2b': # (r2, b)
+            evolutions['r2b'] = 1/self.resource_pools['b']['r2'][0]
 
-        sum_of_rates = self.arrivals_coming() * 0.5 + 1/1.8 * intermediate_state[2] + 1/10 * intermediate_state[3]
+        if PRINT_TRAJECTORY: print(action)
+        
+        # add possible evolutions based on busy processing resources and arrivals
+        if self.arrivals_coming():
+            evolutions['arrival'] = self.arrival_rate
+        if len(self.processing_r1) > 0: # if processing, adds the evaluation of the completion of the task (e.g. r1a)
+            processing_task = self.processing_r1[-1][1]
+            if 'r1' in self.resource_pools[processing_task].keys():
+                evolutions['r1'+processing_task] = 1/self.resource_pools[processing_task]['r1'][0]
+        if len(self.processing_r2) > 0: # if processing, adds the evaluation of the completion of the task (e.g. r2a)
+            processing_task = self.processing_r2[-1][1]
+            if 'r2' in self.resource_pools[processing_task].keys():
+                evolutions['r2'+processing_task] = 1/self.resource_pools[processing_task]['r2'][0]
+        
+        if PRINT_TRAJECTORY: print('pre probabilities', evolutions)
+        sum_of_rates = sum(evolutions.values())
+        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
+        
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
-        
-        if PRINT_TRAJECTORY: print('arrival coming', self.arrivals_coming(), self.total_arrivals)
-        if PRINT_TRAJECTORY: print('sum of rates', sum_of_rates)
-
-        p_arrival = (self.arrivals_coming() * 0.5) / sum_of_rates
-        p_r1a_completion = (1/1.8 * intermediate_state[2]) / sum_of_rates
-        p_r2a_completion = (1/10 * intermediate_state[3]) / sum_of_rates
-        if PRINT_TRAJECTORY: print('pre probabilities', p_arrival, p_r1a_completion, p_r2a_completion)
 
         expected_event_time = 1 / sum_of_rates
-        expected_reward = -expected_event_time * (intermediate_state[4] + intermediate_state[2] + intermediate_state[3]) # waiting cases + r1 processing + r2 processing = total active cases
+        expected_reward = -expected_event_time * nr_active_cases
         if PRINT_TRAJECTORY: print('expected reward', expected_reward)
         if PRINT_TRAJECTORY: print('expected event time', expected_event_time)
 
-        p_arrival_transformed = self.tau / expected_event_time * p_arrival
-        p_r1a_completion_transformed = self.tau / expected_event_time * p_r1a_completion
-        p_r2a_completion_transformed = self.tau / expected_event_time * p_r2a_completion
-        p_return_to_state = 1 - self.tau / expected_event_time
-        if PRINT_TRAJECTORY: print('post probabilities', p_arrival_transformed, p_r1a_completion_transformed, p_r2a_completion_transformed, p_return_to_state)
+        transformed_evolutions = {}
+        for evolution, rate in evolutions.items():
+            transformed_evolutions[evolution] = rate * self.tau / expected_event_time
+        transformed_evolutions['return_to_state'] = 1 - self.tau / expected_event_time
+
+        if PRINT_TRAJECTORY: print('post probabilities', transformed_evolutions)
         reward_rate = expected_reward / expected_event_time
         expected_reward_transformed = reward_rate * self.tau
 
-        evolution = self.crn.choice(['arrival', 'r1a', 'r2a', 'return_to_state'], weights=[p_arrival_transformed, p_r1a_completion_transformed, p_r2a_completion_transformed, p_return_to_state])
+        events, probs = zip(*list(transformed_evolutions.items()))
+        evolution = self.crn.choice(events, weights=probs)
+
         if PRINT_TRAJECTORY: print('evolution', evolution, '\n')
         
         if evolution != 'return_to_state':
-            # process the action, 'postpone' and 'do nothing', do nothing to the state.
-            if action[0]: # (r1, a)
-                self.processing_r1.append(self.waiting_cases.pop(0))
+            next_task = None
+            # actually process the action
+            if action == 'r1a':  # (r1, a)
+                self.processing_r1.append((self.waiting_cases['a'].pop(0), 'a'))
                 if self.reporter is not None:
                     self.reporter.callback(self.processing_r1[-1], 'a', '<task:start>', self.total_time)
-            elif action[1]: # (r2, a)
-                self.processing_r2.append(self.waiting_cases.pop(0))
+            elif action == 'r2a': # (r2, a)
+                self.processing_r2.append((self.waiting_cases['a'].pop(0), 'a'))
                 if self.reporter is not None:
                     self.reporter.callback(self.processing_r2[-1], 'a', '<task:start>', self.total_time)
+            elif action == 'r1b':  # (r1, b)
+                self.processing_r1.append((self.waiting_cases['b'].pop(0), 'b'))
+                if self.reporter is not None:
+                    self.reporter.callback(self.processing_r1[-1], 'b', '<task:start>', self.total_time)
+            elif action == 'r2b': # (r2, b)
+                self.processing_r2.append((self.waiting_cases['b'].pop(0), 'b'))
+                if self.reporter is not None:
+                    self.reporter.callback(self.processing_r2[-1], 'b', '<task:start>', self.total_time)
 
             # now calculate the next state and how long it takes to reach that state
             # the time is to the next state is exponentially distributed with rate 
@@ -117,23 +199,41 @@ class MDP:
             # this is the probability of the next state being the consequence of:
             # an arrival, r1 processing the task or r2 processing the task
             # the probability of one of these evolutions happening is proportional to the rate of that evolution.
-            if sum_of_rates == 0:
-                return self.observation(), 0, self.is_done(), False, None
-            else:
-                if evolution == 'arrival':
-                    self.waiting_cases.append(self.total_arrivals)
-                    if self.reporter is not None:
-                        self.reporter.callback(self.total_arrivals, 'start', '<event:complete>', self.total_time)
-                    self.total_arrivals += 1
-                elif evolution == 'r1a':
-                    case_id = self.processing_r1.pop(0)
-                    if self.reporter is not None:
-                        self.reporter.callback(case_id, 'a', '<task:complete>', self.total_time, 'r1')
-                elif evolution == 'r2a':
-                    case_id = self.processing_r2.pop(0)
-                    if self.reporter is not None:
-                        self.reporter.callback(case_id, 'a', '<task:complete>', self.total_time, 'r2')
-                return self.observation(), expected_reward_transformed, self.is_done(), False, None
+            if evolution == 'arrival':
+                # sample the first task from the transition matrix
+                self.waiting_cases[self.sample_next_task('Start')].append(self.total_arrivals)
+                if self.reporter is not None:
+                    self.reporter.callback(self.total_arrivals, 'start', '<event:arrival>', self.total_time)
+                self.total_arrivals += 1
+            elif evolution == 'r1a':
+                case_id = self.processing_r1.pop(0)[0]
+                next_task = self.sample_next_task('a')
+                if self.reporter is not None:
+                    self.reporter.callback(case_id, 'a', '<task:complete>', self.total_time, 'r1')
+            elif evolution == 'r2a':
+                case_id = self.processing_r2.pop(0)[0]
+                next_task = self.sample_next_task('a')
+                if self.reporter is not None:
+                    self.reporter.callback(case_id, 'a', '<task:complete>', self.total_time, 'r2')
+            elif evolution == 'r1b':
+                case_id = self.processing_r1.pop(0)[0]
+                next_task = self.sample_next_task('b')
+                if self.reporter is not None:
+                    self.reporter.callback(case_id, 'b', '<task:complete>', self.total_time, 'r1')
+            elif evolution == 'r2b':
+                case_id = self.processing_r2.pop(0)[0]
+                next_task = self.sample_next_task('b')
+                if self.reporter is not None:
+                    self.reporter.callback(case_id, 'b', '<task:complete>', self.total_time, 'r2')
+
+            if next_task is not None and next_task != 'Complete':
+                self.waiting_cases[next_task].append(case_id)
+                if self.reporter is not None:
+                    self.reporter.callback(case_id, next_task, '<task:start>', self.total_time)
+            elif next_task == 'Complete':
+                self.completed_cases.append(case_id)
+            self.total_time += self.tau
+            return self.observation(), expected_reward_transformed, self.is_done(), False, None
         else:
             self.total_time += self.tau
             return self.observation(), expected_reward_transformed, self.is_done(), False, None
@@ -146,17 +246,29 @@ class MDP:
         # (r2, a) is only possible if there is a task waiting and r2 is available
         # postpone is only possible if there is something to postpone, i.e. there is a task waiting and a resource is available
         # do nothing is only possible if nothing can be done, i.e. there is no task waiting or no resource is available
-        a1_possible = len(self.waiting_cases) > 0 and len(self.processing_r1) == 0
-        a2_possible = len(self.waiting_cases) > 0 and len(self.processing_r2) == 0
-        postpone_possible = (self.arrivals_coming() > 0) and (a1_possible or a2_possible)
-        do_nothing_possible = not (a1_possible or a2_possible or postpone_possible)
-        return [a1_possible, a2_possible, postpone_possible, do_nothing_possible]
+        if len(self.task_types) == 1:
+            a1_possible = len(self.waiting_cases['a']) > 0 and len(self.processing_r1) == 0 and 'r1' in self.resource_pools['a'].keys()
+            a2_possible = len(self.waiting_cases['a']) > 0 and len(self.processing_r2) == 0 and 'r2' in self.resource_pools['a'].keys()
+            postpone_possible = (self.arrivals_coming() > 0) and (a1_possible or a2_possible)
+            do_nothing_possible = not (a1_possible or a2_possible or postpone_possible)
+            return [a1_possible, a2_possible, postpone_possible, do_nothing_possible]
+        else:
+            r1a_possible = len(self.waiting_cases['a']) > 0 and len(self.processing_r1) == 0 and 'r1' in self.resource_pools['a'].keys()
+            r1b_possible = len(self.waiting_cases['b']) > 0 and len(self.processing_r1) == 0 and 'r1' in self.resource_pools['b'].keys()
+            r2a_possible = len(self.waiting_cases['a']) > 0 and len(self.processing_r2) == 0 and 'r2' in self.resource_pools['a'].keys()
+            r2b_possible = len(self.waiting_cases['b']) > 0 and len(self.processing_r2) == 0 and 'r2' in self.resource_pools['b'].keys()
+            postpone_possible = (self.arrivals_coming() > 0) and (r1a_possible or r1b_possible or r2a_possible or r2b_possible)
+            do_nothing_possible = not (r1a_possible or r1b_possible or r2a_possible or r2b_possible or postpone_possible)
+            if self.config_type != 'n_system':
+                return [r1a_possible, r1b_possible, r2a_possible, r2b_possible, postpone_possible, do_nothing_possible]
+            else:
+                return [r1a_possible, r1b_possible, r2b_possible, postpone_possible, do_nothing_possible]
     
     def is_done(self):
         """
         The simulation is done if we have reached the maximum number of arrivals and there are no more tasks to process.
         """
-        return not self.arrivals_coming() and len(self.waiting_cases) == 0 and len(self.processing_r1) == 0 and len(self.processing_r2) == 0
+        return not self.arrivals_coming() and sum(len(v) for v in self.waiting_cases.values()) == 0 and len(self.processing_r1) == 0 and len(self.processing_r2) == 0
         
 
 def random_policy(env):
@@ -195,19 +307,22 @@ def threshold_policy(env, observation=None, action_mask=None):
 if __name__ == '__main__':
     reporter = EventLogReporter("test.csv")
     tau = 0.5
-    env = MDP(2500, tau=tau, reporter=reporter)
+    env = MDP(50, tau=tau, reporter=reporter, config_type='slow_server')
 
     done = False
     steps = 0
+    total_reward = 0
     max_steps = 100000
     while steps < max_steps and not done:        
         action = greedy_policy(env)
         
         state, reward, done, _, _ = env.step(action)
+        total_reward += reward
         time = env.total_time
 
         # print(action, state, reward, time)
 
         steps += 1
-    
+    print('nr_steps:', steps)
+    print('reward:', total_reward)
     reporter.close()

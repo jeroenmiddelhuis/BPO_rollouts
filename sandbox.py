@@ -3,8 +3,8 @@ import smdp
 import mdp
 from crn import CRN
 
-env = mdp.MDP(10)
-env.set_state(([1, 2], [], [], 0, 2, 10))
+env = smdp.SMDP(10, config_type='n_system')
+env.set_state([{'a':[1], 'b':[2]}, [(2, 'b')], [(3, 'a')], 0, 2, 10])
 
 # self.waiting_cases = state[0].copy()
 # self.processing_r1 = state[1].copy()
@@ -13,9 +13,10 @@ env.set_state(([1, 2], [], [], 0, 2, 10))
 # self.total_arrivals = state[4]
 # self.nr_arrivals = state[5]
 
-
 print(env.observation())
-env.step([0,0,0,1])  # now a case must have arrived consequently r1, r2, and postpone are all possible
+#print([env.sample_next_task('Start') for _ in range(50)])
+print(env.action_space)
+env.step([0,0,0,0,1])  # now a case must have arrived consequently r1, r2, and postpone are all possible
 observation, possible_actions, rewards = rollouts.multiple_rollouts_per_action(env, mdp.greedy_policy, 5)
 print(observation)
 print(possible_actions)

@@ -1,17 +1,18 @@
 import mdp
 import rollouts
 import policy_learner
+import sys, os
 
 
-def learn(bootstrap_policy, filename_without_extension, learning_iterations=3, episode_length=10, nr_states_to_explore=1000, nr_rollouts=100, only_statistically_significant=False):
-    env = mdp.MDP(episode_length)
+def learn(config_type, bootstrap_policy, filename_without_extension, learning_iterations=3, episode_length=10, nr_states_to_explore=1000, nr_rollouts=100, only_statistically_significant=False):
+    env = mdp.MDP(episode_length, config_type)
 
     pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, only_statistically_significant)
 
     for i in range(1, learning_iterations+1):
-        pl.save(filename_without_extension + ".v" + str(i) + ".keras")
+        pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
         print("Policy verion " + str(i) + " learned, now testing")
-        print(rollouts.evaluate_policy(env, pl.policy, nr_rollouts))
+        print(rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=1000))
         if i < learning_iterations:
             pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
 
@@ -59,10 +60,17 @@ def compare_all_states(filename, episode_length=10, nr_rollouts=100):
             print(observation, mask, action_policy, action_threshold)
 
 
-#learn(mdp.random_policy, "./models/policy_mdp.random_mdp", episode_length=50, learning_iterations=40)
-show_policy("./models/policy_mdp.random_mdp.v39.keras")
-evaluate_policy("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
-compare_all_states("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
+config_type = sys.argv[1]#'slow_server'
+learning_iterations = 20
+
+dir = f".//models//mdp_full_rollout//{config_type}"
+if not os.path.exists(dir):
+    os.makedirs(dir)
+
+learn(config_type, mdp.random_policy, dir, episode_length=50, learning_iterations=learning_iterations, nr_states_to_explore=1000)
+# show_policy("./models/policy_mdp.random_mdp.v39.keras")
+# evaluate_policy("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
+# compare_all_states("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
 
 
 # show_policy("./models/policy_smdp.random.v40.keras")

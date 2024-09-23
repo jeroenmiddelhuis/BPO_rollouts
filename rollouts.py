@@ -57,6 +57,7 @@ def multiple_rollouts_per_action(env, policy, nr_rollouts_per_action):
     # Note that actions are one-hot encoded, so we translate the action mask to a list of possible actions.
     # We then turn them into tuples, so we can use them as keys in a dictionary.
     possible_actions = [tuple([0]*i + [1] + [0]*(len(action_mask)-i-1)) for i in range(len(action_mask)) if action_mask[i]]
+
     rewards = {action: [] for action in possible_actions}
     crn = CRN()
     for _ in range(nr_rollouts_per_action):
@@ -76,6 +77,7 @@ def find_learning_sample(env, policy, nr_rollouts_per_action, only_statistically
     If one action is significantly better than the others, we add a learning sample for that action.
     """
     observation, possible_actions, rewards = multiple_rollouts_per_action(env, policy, nr_rollouts_per_action)
+    
     if observation is None:  # if we can't learn anything, we return None.
         return None
     means = {action: np.mean(rewards[action]) for action in possible_actions}
@@ -127,7 +129,8 @@ def random_states(env, policy, nr_states):
             current_step += 1
             if done:
                 env.reset()
-        sampled_states.append(env.get_state())
+        if sum(env.action_mask()) > 1:
+            sampled_states.append(env.get_state(rollout=True))
     return sampled_states
 
 
@@ -157,17 +160,18 @@ def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_actio
     if learner == None:
         learner = PolicyLearner()
         learner.build_model(learning_samples_X, learning_samples_y)
-    else:
-        learner.update_model(learning_samples_X, learning_samples_y)
+    learner.update_model(learning_samples_X, learning_samples_y)
     return learner
 
 
-def evaluate_policy(env, policy, nr_rollouts=100):
+def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None):
     """
     Evaluates the policy by doing a number of rollouts and averaging the rewards.
     """
     total_reward = 0
-    for _ in range(nr_rollouts):
+    for i in range(nr_rollouts):
         env.reset()
+        if nr_arrivals is not None:
+            env.nr_arrivals = nr_arrivals
         total_reward += rollout(env, policy)
     return total_reward / nr_rollouts
