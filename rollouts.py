@@ -4,9 +4,9 @@ import math
 from tqdm import tqdm
 from policy_learner import PolicyLearner
 from crn import CRN
+import smdp
 
-
-def rollout(env, policy):
+def rollout(env, policy, nr_steps_per_rollout=np.inf):
     """
     Does a rollout for the environment from the current state using the given policy.
     Assumes that the environment is terminating.
@@ -14,10 +14,14 @@ def rollout(env, policy):
     """
     done = False
     total_reward = 0
+    nr_steps = 0
     while not done:
         action = policy(env)
         _, reward, done, _, _ = env.step(action)
+        nr_steps += 1
         total_reward += reward
+        if nr_steps >= nr_steps_per_rollout:
+            done = True
     return total_reward
 
 
@@ -41,7 +45,7 @@ def rollout_with_full_information(env, policy):
     return total_reward, rollout_info
 
 
-def multiple_rollouts_per_action(env, policy, nr_rollouts_per_action):
+def multiple_rollouts_per_action(env, policy, nr_rollouts_per_action, nr_steps_per_rollout):
     """
     Does multiple rollouts per possible action
     from the current state of the environment 
@@ -67,16 +71,16 @@ def multiple_rollouts_per_action(env, policy, nr_rollouts_per_action):
             env.set_state(state)
             # step the action and get the reward
             _, reward, _, _, _ = env.step(action)
-            rewards[action].append(rollout(env, policy) + reward)
+            rewards[action].append(rollout(env, policy, nr_steps_per_rollout - 1) + reward)
     return observation, possible_actions, rewards
 
 
-def find_learning_sample(env, policy, nr_rollouts_per_action, only_statistically_significant=False):
+def find_learning_sample(env, policy, nr_rollouts_per_action, nr_steps_per_rollout, only_statistically_significant=False):
     """
     Finds a learning sample by comparing the rewards of different actions.
     If one action is significantly better than the others, we add a learning sample for that action.
     """
-    observation, possible_actions, rewards = multiple_rollouts_per_action(env, policy, nr_rollouts_per_action)
+    observation, possible_actions, rewards = multiple_rollouts_per_action(env, policy, nr_rollouts_per_action, nr_steps_per_rollout)
     
     if observation is None:  # if we can't learn anything, we return None.
         return None
@@ -130,11 +134,18 @@ def random_states(env, policy, nr_states):
             if done:
                 env.reset()
         if sum(env.action_mask()) > 1:
-            sampled_states.append(env.get_state(rollout=True))
+            sampled_states.append(env.get_state(rollout_length=100)) # Add more case arrivals to the state by setting rollout_length
     return sampled_states
 
 
-def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_action_per_state=50, only_statistically_significant=False, learner=None):
+def learn_iteration(env, 
+                    policy, 
+                    nr_states_to_explore=100, 
+                    nr_rollouts_per_action_per_state=50, 
+                    nr_steps_per_rollout=np.inf,  
+                    learner=None, 
+                    model_type='neural_network',
+                    only_statistically_significant=False):
     """
     Does one iteration of learning. In the following steps:
     1. Samples start states.
@@ -143,13 +154,13 @@ def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_actio
     The policy is learned as neural network.
     Returns the policy as a class.
     """
-    states = random_states(env, policy, nr_states_to_explore)
+    states = random_states(env, smdp.epsilon_greedy_policy, nr_states_to_explore) # we use the random policy to sample the start states. SMDP and MDP random policy is the same.
     learning_samples_X = []
     learning_samples_y = []
     for i in tqdm(range(len(states))):
         state = states[i]
         env.set_state(state)
-        learning_sample = find_learning_sample(env, policy, nr_rollouts_per_action_per_state, only_statistically_significant)
+        learning_sample = find_learning_sample(env, policy, nr_rollouts_per_action_per_state, nr_steps_per_rollout, only_statistically_significant)
         if learning_sample is not None:
             learning_samples_X.append(learning_sample[0])
             learning_samples_y.append(learning_sample[1])
@@ -159,7 +170,7 @@ def learn_iteration(env, policy, nr_states_to_explore=100, nr_rollouts_per_actio
     # now we have the learning samples, let's train a new policy.
     if learner == None:
         learner = PolicyLearner()
-        learner.build_model(learning_samples_X, learning_samples_y)
+        learner.build_model(learning_samples_X, learning_samples_y, model_type=model_type)
     learner.update_model(learning_samples_X, learning_samples_y)
     return learner
 

@@ -1,20 +1,35 @@
 import mdp
 import rollouts
 import policy_learner
-import sys, os
+import sys, os, re
 
+def learn(config_type, 
+          bootstrap_policy, 
+          filename_without_extension, 
+          learning_iterations=3, 
+          episode_length=10, 
+          nr_states_to_explore=1000, 
+          nr_rollouts=100, 
+          nr_steps_per_rollout=100,
+          model_type = 'neural_network', 
+          only_statistically_significant=False,
+          tau=0.5):
+    env = mdp.MDP(episode_length, config_type, tau)
 
-def learn(config_type, bootstrap_policy, filename_without_extension, learning_iterations=3, episode_length=10, nr_states_to_explore=1000, nr_rollouts=100, only_statistically_significant=False):
-    env = mdp.MDP(episode_length, config_type)
-
-    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, only_statistically_significant)
+    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
 
     for i in range(1, learning_iterations+1):
-        pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
+        if model_type == 'neural_network':
+            pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
+        elif model_type == 'xgboost':
+            pl.model.save_model(filename_without_extension + config_type + ".v" + str(i) + ".xgb.json")
         print("Policy verion " + str(i) + " learned, now testing")
-        print(rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=1000))
+        print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
+              'Greedy policy:', rollouts.evaluate_policy(env, mdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
+              'Random policy:', rollouts.evaluate_policy(env, mdp.random_policy, nr_rollouts, nr_arrivals=3000))
         if i < learning_iterations:
-            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
+            # pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
+            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
 
 
 def show_policy(filename):
@@ -31,11 +46,44 @@ def show_policy(filename):
         print(observation, pl.predict(observation, [False, True, True, False]))
     
 
-def evaluate_policy(filename, episode_length=10, nr_rollouts=100):
-    env = mdp.MDP(episode_length)
-    pl = policy_learner.PolicyLearner.load(filename)
-    print("Learned policy:", rollouts.evaluate_policy(env, pl.policy, nr_rollouts))
-    print("Threshold policy:", rollouts.evaluate_policy(env, mdp.threshold_policy, nr_rollouts))
+def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, model_type=None):
+    env = mdp.MDP(episode_length, config_type, tau=0.25)
+    pl = policy_learner.PolicyLearner.load(filename, model_type)
+    version_number = re.search(r'v(\d+)', filename).group(1)
+    average_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts)
+    
+    # Prepare results directory and file
+    if results_dir:
+        os.makedirs(results_dir, exist_ok=True)
+        results_file_path = os.path.join(results_dir, f'results_{model_type}_{model_type}.txt')
+    else:
+        results_file_path = f'results_{model_type}.txt'
+    
+    if version_number != '1':
+        with open(results_file_path, 'a') as results_file:
+            results_file.write(f"{model_type} v{version_number}, {average_reward}\n")
+            print(f"Learned {model_type} policy:", average_reward)
+    else:
+        with open(results_file_path, 'w') as results_file:
+            results_file.write(f"{model_type} v{version_number}, {average_reward}\n")
+            print("Learned policy:", average_reward)
+            
+            if config_type == 'single_activity':
+                average_reward = rollouts.evaluate_policy(env, mdp.threshold_policy, nr_rollouts)
+                results_file.write(f"Threshold, {average_reward}\n")
+                print("Threshold policy:", average_reward)
+            else:
+                average_reward = rollouts.evaluate_policy(env, mdp.greedy_policy, nr_rollouts)
+                results_file.write(f"Greedy, {average_reward}\n")
+                print('Greedy:', average_reward)
+                
+                average_reward = rollouts.evaluate_policy(env, mdp.random_policy, nr_rollouts)
+                results_file.write(f"Random, {average_reward}\n")
+                print('Random policy:', average_reward)
+
+                average_reward = rollouts.evaluate_policy(env, mdp.fifo_policy, nr_rollouts)
+                results_file.write(f"FIFO, {average_reward}\n")
+                print('FIFO policy:', average_reward)
 
 
 def compare_all_states(filename, episode_length=10, nr_rollouts=100):
@@ -60,19 +108,50 @@ def compare_all_states(filename, episode_length=10, nr_rollouts=100):
             print(observation, mask, action_policy, action_threshold)
 
 
-config_type = sys.argv[1]#'slow_server'
-learning_iterations = 20
+"""
+Test of rollout
+"""
 
-dir = f".//models//mdp_full_rollout//{config_type}"
+# env = mdp.MDP(3000, 'n_system')
+# reward = rollouts.evaluate_policy(env, mdp.fifo_policy, nr_rollouts=100)
+# print(reward)
+
+"""
+Training of the policies
+"""
+
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+model_type = sys.argv[2] if len(sys.argv) > 2 else 'xgboost'
+learning_iterations = 10
+
+dir = f".//models//mdp//{config_type}//"
 if not os.path.exists(dir):
-    os.makedirs(dir)
+    os.makedirs(dir, exist_ok=True)
 
-learn(config_type, mdp.random_policy, dir, episode_length=50, learning_iterations=learning_iterations, nr_states_to_explore=1000)
-# show_policy("./models/policy_mdp.random_mdp.v39.keras")
-# evaluate_policy("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
-# compare_all_states("./models/policy_mdp.random_mdp.v39.keras", episode_length=50)
+print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+
+learn(config_type, 
+      mdp.random_policy,
+      dir,
+      learning_iterations=learning_iterations,
+      episode_length=2500, # nr_cases
+      nr_states_to_explore=5000,
+      nr_rollouts=50,
+      nr_steps_per_rollout=100,
+      model_type=model_type,
+      tau=0.5)
 
 
-# show_policy("./models/policy_smdp.random.v40.keras")
-# evaluate_policy("./models/policy_smdp.random.v40.keras", episode_length=50, nr_rollouts=1000)
-# compare_all_states("./models/policy_smdp.random.v40.keras", episode_length=50)
+"""
+Evaluation of the learned policies
+"""
+
+# for model_type in ['neural_network', 'xgboost']:
+#     pass
+# model_type = 'neural_network'
+# extension = 'keras' if model_type == 'neural_network' else 'xgb.json'
+# env_type = 'mdp'
+# results_dir = f".//models/smdp//{config_type}//"
+
+# filename = f".//models//{env_type}//{config_type}//{config_type}.v1.{extension}"
+# evaluate_policy(filename, config_type, episode_length=3000, nr_rollouts=100, results_dir=results_dir, model_type=model_type)

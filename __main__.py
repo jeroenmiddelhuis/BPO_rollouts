@@ -1,20 +1,35 @@
 import smdp
 import rollouts
 import policy_learner
-import sys, os
+import sys, os, re
 
-
-def learn(config_type, bootstrap_policy, filename_without_extension, learning_iterations=3, episode_length=10, nr_states_to_explore=1000, nr_rollouts=100, only_statistically_significant=False):
+def learn(config_type, 
+          bootstrap_policy, 
+          filename_without_extension, 
+          learning_iterations=3, 
+          episode_length=10, 
+          nr_states_to_explore=1000, 
+          nr_rollouts=100, 
+          nr_steps_per_rollout=100,
+          model_type = 'neural_network', 
+          only_statistically_significant=False):
+    
     env = smdp.SMDP(episode_length, config_type)
 
-    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, only_statistically_significant)
+    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
 
     for i in range(1, learning_iterations+1):
-        pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
+        if model_type == 'neural_network':
+            pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
+        elif model_type == 'xgboost':
+            pl.model.save_model(filename_without_extension + config_type + ".v" + str(i) + ".xgb.json")
         print("Policy verion " + str(i) + " learned, now testing")
-        print(rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=200))
+        print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
+              'Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
+              'Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts, nr_arrivals=3000))
         if i < learning_iterations:
-            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
+            # pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
+            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
 
 
 def show_policy(filename):
@@ -30,17 +45,41 @@ def show_policy(filename):
         observation = (0, 1, 1, 0, waiting)
         print(observation, pl.predict(observation, [False, True, True, False]))
     
-
-def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100):
+def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, model_type=None, env_type='smdp'):
     env = smdp.SMDP(episode_length, config_type)
-    pl = policy_learner.PolicyLearner.load(filename)
-    print("Learned policy:", rollouts.evaluate_policy(env, pl.policy, nr_rollouts))
-    if config_type == 'single_activity':
-        print("Threshold policy:", rollouts.evaluate_policy(env, smdp.threshold_policy, nr_rollouts))
-    else:
-        print('Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts))
-        print('Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts))
+    pl = policy_learner.PolicyLearner.load(filename, model_type)
+    version_number = re.search(r'v(\d+)', filename).group(1)
+    average_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts)
+    
+    # Prepare results directory and file
+    os.makedirs(results_dir, exist_ok=True)
+    results_file_path = os.path.join(results_dir, f'results_{config_type}.txt')
 
+    if version_number != '1':
+        with open(results_file_path, 'a') as results_file:
+            results_file.write(f"{model_type}, v{version_number}, {env_type}, {average_reward}\n")
+            print(f"Learned {model_type} policy v{version_number}:", average_reward)
+    else:
+        with open(results_file_path, 'a') as results_file:
+            results_file.write(f"{model_type}, v{version_number}, {env_type}, {average_reward}\n")
+            print(f"Learned {model_type} policy v{version_number}:", average_reward)
+            
+            if config_type == 'single_activity':
+                average_reward = rollouts.evaluate_policy(env, smdp.threshold_policy, nr_rollouts)
+                results_file.write(f"Threshold, None, {env_type}, {average_reward}\n")
+                print("Threshold policy:", average_reward)
+            else:
+                average_reward = rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts)
+                results_file.write(f"Greedy, None, {env_type}, {average_reward}\n")
+                print('Greedy:', average_reward)
+                
+                average_reward = rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts)
+                results_file.write(f"Random, None, {env_type}, {average_reward}\n")
+                print('Random policy:', average_reward)
+
+                average_reward = rollouts.evaluate_policy(env, smdp.fifo_policy, nr_rollouts)
+                results_file.write(f"FIFO, None, {env_type}, {average_reward}\n")
+                print('FIFO policy:', average_reward)
 
 def compare_all_states(filename, episode_length=10, nr_rollouts=100):
     """
@@ -63,22 +102,61 @@ def compare_all_states(filename, episode_length=10, nr_rollouts=100):
         if action_policy != action_threshold:
             print(observation, mask, action_policy, action_threshold)
 
-config_type = 'slow_server'
-learning_iterations = 20
+"""
+Test of rollout
+"""
 
-dir = f".//models//mdp_full_rollout//{config_type}//"
-if not os.path.exists(dir):
-    os.makedirs(dir)
+# env = smdp.SMDP(3000, 'n_system')
+# reward = rollouts.evaluate_policy(env, smdp.fifo_policy, nr_rollouts=100)
+# print(reward)
 
-# policy = './models/smdp_full_rollout/slow_server/slow_server.v5.keras'
+"""
+Training of the policies
+"""
 
-# evaluate_policy(policy, config_type, episode_length=200, nr_rollouts=100)
+# config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+# model_type = sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
+# learning_iterations = 10
 
-#
-learn(config_type, smdp.random_policy, dir, episode_length=50, learning_iterations=learning_iterations, nr_states_to_explore=10)
-#show_policy("./models/policy_smdp.random.v40.keras")
-# print('standard rollout')
-# evaluate_policy(f"./models/high_utilization_smdp_no_rollout.random.v5.keras", config_type, episode_length=300, nr_rollouts=1000)
-# print('full rollout (+50 cases)')
-# evaluate_policy(f"./models/high_utilization_smdp.random.v2.keras", config_type, episode_length=300, nr_rollouts=1000)
-#compare_all_states("./models/policy_smdp.random.v40.keras", episode_length=50)
+# dir = f".//models//smdp//{config_type}//"
+# if not os.path.exists(dir):
+#     os.makedirs(dir, exist_ok=True)
+
+# print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+
+# learn(config_type, 
+#       smdp.random_policy,
+#       dir,
+#       learning_iterations=learning_iterations,
+#       episode_length=2500, # nr_cases
+#       nr_states_to_explore=5000,
+#       nr_rollouts=50,
+#       nr_steps_per_rollout=100,
+#       model_type=model_type)
+
+
+"""
+Evaluation of the learned policies
+"""
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+model_type = sys.argv[2] if len(sys.argv) > 2 else 'xgboost'
+env_type = sys.argv[3] if len(sys.argv) > 3 else 'smdp'
+
+for config_type in [config_type]: # ['n_system', 'high_utilization']:
+#config_type = 'down_stream'
+    for model_type in [model_type]:
+    #model_type = 'xgboost'
+        for env_type in [env_type]:
+            print(config_type, model_type, env_type)
+            extension = 'keras' if model_type == 'neural_network' else 'xgb.json'
+            #env_type = 'mdp'
+            results_dir = f".//results//smdp//"
+
+            filename_folder = f".//models//{env_type}//{config_type}//"
+
+            nr_models = len([f for f in os.listdir(filename_folder) if f.endswith(extension)])
+
+            for i in range(1, nr_models + 1):
+                filename = filename_folder + f"{config_type}.v{i}.{extension}"
+                evaluate_policy(filename, config_type, episode_length=1000, nr_rollouts=100, results_dir=results_dir, model_type=model_type, env_type=env_type)
+            print('\n')

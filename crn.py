@@ -9,9 +9,11 @@ class CRN:
         self.__current_random_number = 0        
 
     def __sample(self):
+        return self.__random_generator.random()
         if self.__current_random_number >= len(self.__random_numbers):
             self.__random_numbers.append(self.__random_generator.random())
         self.__current_random_number += 1
+        print('self.__random_numbers', len(self.__random_numbers))
         return self.__random_numbers[self.__current_random_number-1]
 
     def restart_sequence(self):
