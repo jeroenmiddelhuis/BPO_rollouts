@@ -356,23 +356,31 @@ def threshold_policy(env, observation=None, action_mask=None, threshold=5):
 
 
 if __name__ == '__main__':
-    reporter = ProcessReporter()
-    env = SMDP(50, 'slow_server', reporter)
+    nr_replications = 10000
+    avg_cycle_times = []
+    for _ in range(nr_replications):
+        reporter = ProcessReporter()
+        env = SMDP(50, 'slow_server', reporter)
 
-    done = False
-    steps = 0
-    total_reward = 0
-    while not done:        
-        action = greedy_policy(env)
-        
-        state, reward, done, _, _ = env.step(action)
-        total_reward += reward
-        time = env.total_time
+        done = False
+        steps = 0
+        total_reward = 0
+        while not done:        
+            action = greedy_policy(env)
+            
+            state, reward, done, _, _ = env.step(action)
+            total_reward += reward
+            time = env.total_time
 
-        # print(action, state, reward, time)
+            # print(action, state, reward, time)
 
-        steps += 1
-    print('nr_steps:', steps)
-    print('reward:', total_reward)
-    reporter.close()
-    reporter.print_result()
+            steps += 1
+        # print('nr_steps:', steps)
+        # print('reward:', total_reward)
+        reporter.close()
+        # reporter.print_result()
+        avg_cycle_times.append(reporter.total_cycle_time / reporter.nr_completed)
+    # print mean and 95% confidence interval of the average cycle time
+    avg_cycle_times = np.array(avg_cycle_times)
+    print('mean:', np.mean(avg_cycle_times))
+    print('95% CI:', np.percentile(avg_cycle_times, [2.5, 97.5]))

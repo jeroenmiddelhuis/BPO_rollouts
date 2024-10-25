@@ -378,25 +378,33 @@ def threshold_policy(env, observation=None, action_mask=None):
 
 
 if __name__ == '__main__':
-    reporter = ProcessReporter()
-    tau = 0.5
-    env = MDP(50, tau=tau, reporter=reporter, config_type='slow_server')
+    nr_replications = 1000
+    avg_cycle_times = []
+    for _ in range(nr_replications):
+        reporter = ProcessReporter()
+        tau = 0.1
+        env = MDP(50, tau=tau, reporter=reporter, config_type='slow_server')
 
-    done = False
-    steps = 0
-    total_reward = 0
-    max_steps = 100000
-    while steps < max_steps and not done:        
-        action = greedy_policy(env)
-        
-        state, reward, done, _, _ = env.step(action)
-        total_reward += reward
-        time = env.total_time
+        done = False
+        steps = 0
+        total_reward = 0
+        max_steps = 100000
+        while steps < max_steps and not done:        
+            action = greedy_policy(env)
+            
+            state, reward, done, _, _ = env.step(action)
+            total_reward += reward
+            time = env.total_time
 
-        # print(action, state, reward, time)
+            # print(action, state, reward, time)
 
-        steps += 1
-    print('nr_steps:', steps)
-    print('reward:', total_reward)
-    reporter.close()
-    reporter.print_result()
+            steps += 1
+        # print('nr_steps:', steps)
+        # print('reward:', total_reward)
+        reporter.close()
+        # reporter.print_result()
+        avg_cycle_times.append(reporter.total_cycle_time / reporter.nr_completed)
+    # print mean and 95% confidence interval of the average cycle time
+    avg_cycle_times = np.array(avg_cycle_times)
+    print('mean:', np.mean(avg_cycle_times))
+    print('95% CI:', np.percentile(avg_cycle_times, [2.5, 97.5]))
