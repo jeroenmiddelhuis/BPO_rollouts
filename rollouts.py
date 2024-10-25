@@ -81,6 +81,7 @@ def find_learning_sample(env, policy, nr_rollouts_per_action, nr_steps_per_rollo
     If one action is significantly better than the others, we add a learning sample for that action.
     """
     observation, possible_actions, rewards = multiple_rollouts_per_action(env, policy, nr_rollouts_per_action, nr_steps_per_rollout)
+    print(len(possible_actions))
     
     if observation is None:  # if we can't learn anything, we return None.
         return None

@@ -1,4 +1,4 @@
-from reporters import EventLogReporter
+from reporters import EventLogReporter, ProcessReporter
 from crn import CRN
 import sys, os, json
 import numpy as np
@@ -166,7 +166,7 @@ class MDP:
                 if len(self.waiting_cases[task]) > 0:
                     getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
                     if self.reporter:
-                        self.reporter.callback(getattr(self, f'processing_{resource}')[-1], task, '<task:start>', self.total_time)
+                        self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
                 else:                    
                     print("Invalid action")
                     print('Observation:', self.observation())
@@ -184,7 +184,7 @@ class MDP:
                 # sample the first task from the transition matrix
                 self.waiting_cases[self.sample_next_task('Start')].append(self.total_arrivals)
                 if self.reporter is not None:
-                    self.reporter.callback(self.total_arrivals, 'start', '<event:arrival>', self.total_time)
+                    self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
                 self.total_arrivals += 1
             else:
                 resource, task = evolution[0:2], evolution[2]
@@ -194,9 +194,9 @@ class MDP:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 if next_task and next_task != 'Complete':
                     self.waiting_cases[next_task].append(case_id)
-                    if self.reporter:
-                        self.reporter.callback(case_id, next_task, '<task:start>', self.total_time)
                 elif next_task == 'Complete':
+                    if self.reporter:
+                        self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
                     self.completed_cases.append(case_id)
             self.total_time += self.tau
             return self.observation(), reward, self.is_done(), False, None
@@ -378,7 +378,7 @@ def threshold_policy(env, observation=None, action_mask=None):
 
 
 if __name__ == '__main__':
-    reporter = EventLogReporter("test.csv")
+    reporter = ProcessReporter()
     tau = 0.5
     env = MDP(50, tau=tau, reporter=reporter, config_type='slow_server')
 
@@ -399,3 +399,4 @@ if __name__ == '__main__':
     print('nr_steps:', steps)
     print('reward:', total_reward)
     reporter.close()
+    reporter.print_result()

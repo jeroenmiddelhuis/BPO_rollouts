@@ -1,4 +1,4 @@
-from reporters import EventLogReporter
+from reporters import EventLogReporter, ProcessReporter
 from crn import CRN
 import sys, os, json
 import numpy as np
@@ -120,7 +120,7 @@ class SMDP:
             if len(self.waiting_cases[task]) > 0:
                 getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
                 if self.reporter:
-                    self.reporter.callback(getattr(self, f'processing_{resource}')[-1], task, '<task:start>', self.total_time)
+                    self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
             else:
                 wrong_assignment = True
 
@@ -164,7 +164,7 @@ class SMDP:
                 self.waiting_cases[task].append(self.total_arrivals)
                 #self.cases[self.total_arrivals] = [("Start", self.total_time)]
                 if self.reporter:
-                    self.reporter.callback(self.total_arrivals, 'start', '<event:arrival>', self.total_time)
+                    self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
                 self.total_arrivals += 1
             else:
                 resource, task = evolution[0:2], evolution[2]
@@ -175,9 +175,9 @@ class SMDP:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 if next_task and next_task != 'Complete':
                     self.waiting_cases[next_task].append(case_id)
-                    if self.reporter:
-                        self.reporter.callback(case_id, next_task, '<task:start>', self.total_time)
                 elif next_task == 'Complete':
+                    if self.reporter:
+                        self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
                     pass
                     #self.completed_cases.append(case_id)
                     #self.cases[case_id].append(("Complete", self.total_time))
@@ -356,8 +356,7 @@ def threshold_policy(env, observation=None, action_mask=None, threshold=5):
 
 
 if __name__ == '__main__':
-    reporter = EventLogReporter("test.csv")
-
+    reporter = ProcessReporter()
     env = SMDP(50, 'slow_server', reporter)
 
     done = False
@@ -376,3 +375,4 @@ if __name__ == '__main__':
     print('nr_steps:', steps)
     print('reward:', total_reward)
     reporter.close()
+    reporter.print_result()
