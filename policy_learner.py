@@ -63,7 +63,6 @@ class PolicyLearner:
             params = self.model.get_xgb_params()
             self.model = xgb.train(params, dtrain, xgb_model=self.model.get_booster())
 
-
     def predict(self, observation, action_mask):
         observation = np.array(observation)
         if self.model_type == 'neural_network' and len(observation) == 6:  # two resources and two activities
@@ -118,13 +117,16 @@ class PolicyLearner:
         return self.predict(observation, action_mask)
     
     def save(self, filename):
-        self.model.save(filename)
+        if filename.endswith('.keras'):
+            self.model.save(filename)
+        elif filename.endswith('.json'):
+            self.model.save_model(filename)
 
-    def load(filename, model_type='neural_network'):
-        if model_type == 'neural_network':
+    def load(filename):
+        if filename.endswith('.keras'):
             self = PolicyLearner()
             self.model = tf.keras.models.load_model(filename)
-        else:
+        elif filename.endswith('.json'):
             self = PolicyLearner()
             self.model = xgb.Booster()
             self.model.load_model(filename)
@@ -136,7 +138,18 @@ class PolicyLearner:
         print("Cache evictions: ", self.cache_evictions)
 
     def copy(self):
+        print(type(self.model))
+        if isinstance(self.model, tf.keras.Model):
+            model = tf.keras.models.clone_model(self.model)
+            model.set_weights(self.model.get_weights())
+        elif isinstance(self.model, xgb.Booster):
+            model = XGBClassifier()
+            model._Booster = self.model.get_booster()
+            model._le = self.model._le
+            model._feature_names = self.model.get_booster().feature_names
+            model._feature_types = self.model.get_booster().feature_types
+
         learner = PolicyLearner()
-        learner.model = tf.keras.models.clone_model(self.model)
+        learner.model = model
         return learner
         

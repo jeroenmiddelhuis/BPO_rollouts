@@ -337,7 +337,7 @@ def fifo_policy(env):
 
 
 def epsilon_greedy_policy(env):
-    if env.crn.generate_uniform() < 0.2:
+    if env.crn.generate_uniform() < 0.25:
         return random_policy(env)
     else:
         return greedy_policy(env)

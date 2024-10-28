@@ -15,21 +15,37 @@ def learn(config_type,
           only_statistically_significant=False):
     
     env = smdp.SMDP(episode_length, config_type)
-
     pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
+    extension = '.keras' if model_type == 'neural_network' else '.xgb.json'
+    pl.save(filename_without_extension + config_type + ".v1" + extension)
+
+    best_policy = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v1" + extension)    
+    best_policy_reward = rollouts.evaluate_policy(env, best_policy.policy, nr_rollouts, nr_arrivals=3000)
+    best_policy_v = 1
 
     for i in range(1, learning_iterations+1):
-        if model_type == 'neural_network':
-            pl.save(filename_without_extension + config_type + ".v" + str(i) + ".keras")
-        elif model_type == 'xgboost':
-            pl.model.save_model(filename_without_extension + config_type + ".v" + str(i) + ".xgb.json")
+        #pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
         print("Policy verion " + str(i) + " learned, now testing")
-        print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
-              'Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
-              'Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts, nr_arrivals=3000))
+        # print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
+        #       'Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
+        #       'Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts, nr_arrivals=3000))
         if i < learning_iterations:
-            # pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, only_statistically_significant, pl)
             pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
+            
+            print('Evaluating new policy..')
+            new_policy_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000)
+            print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i+1}: {new_policy_reward}.")
+            if new_policy_reward < best_policy_reward: # Higher reward is better (less negative)                
+                pl = best_policy
+                print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
+            else:                
+                best_policy = pl
+                best_policy_reward = new_policy_reward
+                best_policy_v = i + 1
+                print(f"Policy version {i} improved, continuing with policy version {best_policy_v}.")
+            print('\n')
+
+    best_policy.save(filename_without_extension + config_type + ".best_policy" + extension)           
 
 
 def show_policy(filename):
@@ -47,7 +63,7 @@ def show_policy(filename):
     
 def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, model_type=None, env_type='smdp'):
     env = smdp.SMDP(episode_length, config_type)
-    pl = policy_learner.PolicyLearner.load(filename, model_type)
+    pl = policy_learner.PolicyLearner.load(filename)
     version_number = re.search(r'v(\d+)', filename).group(1)
     average_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts)
     
@@ -114,49 +130,49 @@ Test of rollout
 Training of the policies
 """
 
-# config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
-# model_type = sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
-# learning_iterations = 10
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+model_type = sys.argv[2] if len(sys.argv) > 2 else 'xgboost'
+learning_iterations = 10
 
-# dir = f".//models//smdp//{config_type}//"
-# if not os.path.exists(dir):
-#     os.makedirs(dir, exist_ok=True)
+dir = f".//models//smdp//{config_type}//"
+if not os.path.exists(dir):
+    os.makedirs(dir, exist_ok=True)
 
-# print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
 
-# learn(config_type, 
-#       smdp.random_policy,
-#       dir,
-#       learning_iterations=learning_iterations,
-#       episode_length=2500, # nr_cases
-#       nr_states_to_explore=5000,
-#       nr_rollouts=50,
-#       nr_steps_per_rollout=100,
-#       model_type=model_type)
+learn(config_type, 
+      smdp.random_policy,
+      dir,
+      learning_iterations=learning_iterations,
+      episode_length=2500, # nr_cases
+      nr_states_to_explore=5000,
+      nr_rollouts=50,
+      nr_steps_per_rollout=20,
+      model_type=model_type)
 
 
 """
 Evaluation of the learned policies
 """
-config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
-model_type = sys.argv[2] if len(sys.argv) > 2 else 'xgboost'
-env_type = sys.argv[3] if len(sys.argv) > 3 else 'smdp'
+# config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+# model_type = sys.argv[2] if len(sys.argv) > 2 else 'xgboost'
+# env_type = sys.argv[3] if len(sys.argv) > 3 else 'smdp'
 
-for config_type in [config_type]: # ['n_system', 'high_utilization']:
-#config_type = 'down_stream'
-    for model_type in [model_type]:
-    #model_type = 'xgboost'
-        for env_type in [env_type]:
-            print(config_type, model_type, env_type)
-            extension = 'keras' if model_type == 'neural_network' else 'xgb.json'
-            #env_type = 'mdp'
-            results_dir = f".//results//smdp//"
+# for config_type in [config_type]: # ['n_system', 'high_utilization']:
+# #config_type = 'down_stream'
+#     for model_type in [model_type]:
+#     #model_type = 'xgboost'
+#         for env_type in [env_type]:
+#             print(config_type, model_type, env_type)
+#             extension = 'keras' if model_type == 'neural_network' else 'xgb.json'
+#             #env_type = 'mdp'
+#             results_dir = f".//results//smdp//"
 
-            filename_folder = f".//models//{env_type}//{config_type}//"
+#             filename_folder = f".//models//{env_type}//{config_type}//"
 
-            nr_models = len([f for f in os.listdir(filename_folder) if f.endswith(extension)])
+#             nr_models = len([f for f in os.listdir(filename_folder) if f.endswith(extension)])
 
-            for i in range(1, nr_models + 1):
-                filename = filename_folder + f"{config_type}.v{i}.{extension}"
-                evaluate_policy(filename, config_type, episode_length=1000, nr_rollouts=100, results_dir=results_dir, model_type=model_type, env_type=env_type)
-            print('\n')
+#             for i in range(1, nr_models + 1):
+#                 filename = filename_folder + f"{config_type}.v{i}.{extension}"
+#                 evaluate_policy(filename, config_type, episode_length=1000, nr_rollouts=100, results_dir=results_dir, model_type=model_type, env_type=env_type)
+#             print('\n')
