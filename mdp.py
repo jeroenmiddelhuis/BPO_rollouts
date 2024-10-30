@@ -109,7 +109,7 @@ class MDP:
             # Return the indices of the list that contain a nonzero value
             return [self.task_types_all[index] for index in nonzero_indices]
 
-    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+    def get_evolution_rates(self, processing_r1, processing_r2, arrivals_coming, action=None):
         """
         Returns a dictionary with the possible evolutions and their rates.
         For the MDP, the selected action is used to determine the possible evolutions.
@@ -136,35 +136,53 @@ class MDP:
             evolutions['r2b'] = 1/self.resource_pools['b']['r2'][0]
         return evolutions
 
+    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+        evolution_rates = self.get_evolution_rates(processing_r1, processing_r2, arrivals_coming, action)
+        sum_of_rates = sum(evolution_rates.values())
+        evolutions = {}
+        for evolution, rate in evolution_rates.items():
+            evolutions[evolution] = rate/sum_of_rates
+        return evolutions
+
+    def get_transformed_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+        evolution_rates = self.get_evolution_rates(processing_r1, processing_r2, arrivals_coming, action)
+        #print('rates', evolution_rates)
+        sum_of_rates = sum(evolution_rates.values())
+        #print('sum_of_rates', sum_of_rates)
+        evolutions = {}
+        for evolution, rate in evolution_rates.items():
+            evolutions[evolution] = rate/sum_of_rates
+        #print('evolutions', evolutions, sum(evolutions.values()))
+
+        transformed_evolutions = {}
+        expected_event_time = 1 / sum_of_rates
+        for evolution, rate in evolutions.items():
+            transformed_evolutions[evolution] = self.tau / expected_event_time * evolutions[evolution]
+        transformed_evolutions['return_to_state'] = 1 - self.tau / expected_event_time
+        #print('transformed_evolutions', transformed_evolutions, sum(transformed_evolutions.values()), '\n')
+        return transformed_evolutions, expected_event_time
+
     def step(self, action):
         action_index = action.index(1)
         action = self.action_space[action_index]
-
-        if PRINT_TRAJECTORY: print("Obseration:", self.observation(), 'Action:', action, self.total_time, self.action_mask())
-        # create an intermediate state to calculate the expected reward and the next state
-        # we use this state to calculate if the state actually transitions to the next state
-        # or if the state remains the same. In latter, no resources are added/removed.
         
+        transformed_evolutions, expected_event_time = self.get_transformed_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
+        
+        # transformed_evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
+        # print(transformed_evolutions)
+        # evolution_rates =  self.get_evolution_rates(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
+        # expected_event_time = 1 / sum(evolution_rates.values())
+        # print(evolution_rates, sum(evolution_rates.values()), expected_event_time, '\n')
+
         nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
-
-        evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
-
-        sum_of_rates = sum(evolutions.values())
-        if sum_of_rates == 0:
-            return self.observation(), 0, self.is_done(), False, None
-
-        expected_event_time = 1 / sum_of_rates
         expected_reward = -expected_event_time * nr_active_cases
         reward_rate = expected_reward / expected_event_time
         
-        transformed_evolutions = {}
-        for evolution, rate in evolutions.items():
-            transformed_evolutions[evolution] = rate * self.tau / expected_event_time
-        transformed_evolutions['return_to_state'] = 1 - self.tau / expected_event_time
-        reward = reward_rate * self.tau
+        reward = reward_rate * self.tau # Not needed but kept for consistency with SMDP
 
         events, probs = zip(*list(transformed_evolutions.items()))
         evolution = self.crn.choice(events, weights=probs)
+
         if evolution != 'return_to_state':
             next_task = None
             # process the action, 'postpone' and 'do nothing', do nothing to the state.
@@ -174,6 +192,11 @@ class MDP:
                     getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
                     if self.reporter:
                         self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
+            
+            # the total time changes before the evolution happens
+            # it changes after processing the action
+            self.total_time += self.tau 
+
             # now calculate the next state and how long it takes to reach that state
             # the time is to the next state is exponentially distributed with rate 
             # min(lambda, mu_(r1, a) * active r1, mu_(r2, a) * active r2) = 
@@ -199,7 +222,6 @@ class MDP:
                     if self.reporter:
                         self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
                     self.completed_cases.append(case_id)
-            self.total_time += self.tau
             return self.observation(), reward, self.is_done(), False, None
         else:
             self.total_time += self.tau
@@ -379,12 +401,12 @@ def threshold_policy(env, observation=None, action_mask=None):
 
 
 if __name__ == '__main__':
-    nr_replications = 10000
+    nr_replications = 1000
     avg_cycle_times = []
     for _ in range(nr_replications):
         reporter = ProcessReporter()
-        tau = 0.5
-        env = MDP(100, tau=tau, reporter=reporter, config_type='slow_server')
+        tau = 0.1
+        env = MDP(100, tau=tau, reporter=reporter, config_type='down_stream')
 
         done = False
         steps = 0
