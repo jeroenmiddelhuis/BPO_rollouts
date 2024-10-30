@@ -37,10 +37,10 @@ class SMDP:
         self.state_space = [f"{resource}_{status}" for status in ['available', 'assigned'] for resource in self.resources] +\
                            [f"{task}_queue" for task in self.task_types]
         self.action_space = [f"{resource}{task}" for resource in self.resources for task in self.task_types if resource in self.resource_pools[task] and task != 'Start'] + ['postpone', 'do_nothing']
+
         self.waiting_cases = {task: [] for task in self.task_types}
         #self.completed_cases = []
         #self.cases = {}
-
         self.processing_r1 = []
         self.processing_r2 = []
         self.total_time = 0
@@ -110,10 +110,26 @@ class SMDP:
             # Return the indices of the list that contain a nonzero value
             return [self.task_types_all[index] for index in nonzero_indices]
 
+    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+        """
+        Returns a dictionary with the possible evolutions and their rates.
+        For the MDP, the selected action is used to determine the possible evolutions.
+        """
+        r1_processing = len(processing_r1) > 0
+        r2_processing = len(processing_r2) > 0
+
+        evolutions = {key: value for key, value in {
+            'arrival': self.arrival_rate if arrivals_coming else 0,
+            'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and processing_r1[0][1] == 'a' else 0,
+            'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and processing_r2[0][1] == 'a' else 0,
+            'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and processing_r1[0][1] == 'b' else 0,
+            'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and processing_r2[0][1] == 'b' else 0
+        }.items() if value > 0}
+        return evolutions
+
     def step(self, action):
         action_index = action.index(1)
         action = self.action_space[action_index]
-        wrong_assignment = False
         # process the action, 'postpone' and 'do nothing', do nothing to the state.
         if action in ['r1a', 'r2a', 'r1b', 'r2b']:
             resource, task = action[0:2], action[2]
@@ -121,15 +137,7 @@ class SMDP:
                 getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
                 if self.reporter:
                     self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
-            else:
-                wrong_assignment = True
 
-        if wrong_assignment:
-            print("Invalid action")
-            print('Observation:', self.observation())
-            print('Action:', action)
-            print('Action mask:', self.action_mask())
-            print('nr_arrivals:', self.nr_arrivals, 'total_arrivals:', self.total_arrivals)
         # now calculate the next state and how long it takes to reach that state
         # the time is to the next state is exponentially distributed with rate
         # min(lambda, mu_(r1, a) * active r1, mu_(r2, a) * active r2) = 
@@ -137,18 +145,9 @@ class SMDP:
         # this is the probability of the next state being the consequence of:
         # an arrival, r1 processing the task or r2 processing the task
         # the probability of one of these evolutions happening is proportional to the rate of that evolution.
-        r1_processing = len(self.processing_r1) > 0
-        r2_processing = len(self.processing_r2) > 0
-        nr_active_cases = r1_processing + r2_processing + sum(len(v) for v in self.waiting_cases.values())
+        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
 
-        # Calculate the possible evolutions and the rate at which they happen
-        evolutions = {key: value for key, value in {
-            'arrival': self.arrival_rate if self.arrivals_coming() else 0,
-            'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and self.processing_r1[0][1] == 'a' else 0,
-            'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and self.processing_r2[0][1] == 'a' else 0,
-            'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and self.processing_r1[0][1] == 'b' else 0,
-            'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and self.processing_r2[0][1] == 'b' else 0
-        }.items() if value > 0}
+        evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming())
 
         sum_of_rates = sum(evolutions.values())        
         if sum_of_rates == 0:
@@ -156,8 +155,8 @@ class SMDP:
         else:
             time = self.crn.generate_exponential(sum_of_rates)
             self.total_time += time
-            evolution_keys = list(evolutions.keys())
-            evolution = self.crn.choice(evolution_keys, weights=[evolutions[key]/sum_of_rates for key in evolution_keys])
+            events, probs = zip(*list(evolutions.items()))
+            evolution = self.crn.choice(events, weights=probs)
 
             if evolution == 'arrival':
                 task = self.sample_next_task('Start')
@@ -225,10 +224,10 @@ class SMDP:
             # - all assignments are possible
             if self.arrivals_coming():
                 # (one resource, one task), (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = 1 < sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4
+                postpone_possible = 1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4
             else:
                 # (one resource, one task), not (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = (1 < sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4 and
+                postpone_possible = (1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4 and
                                     not (r1_available and r2_available)) # can't postpone if both resources are available, but no arrivals 
 
             do_nothing_possible = sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible, postpone_possible]) == 0
@@ -360,7 +359,7 @@ if __name__ == '__main__':
     avg_cycle_times = []
     for _ in range(nr_replications):
         reporter = ProcessReporter()
-        env = SMDP(50, 'slow_server', reporter)
+        env = SMDP(100, 'slow_server', reporter)
 
         done = False
         steps = 0

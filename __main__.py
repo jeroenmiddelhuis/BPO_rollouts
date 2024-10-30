@@ -24,25 +24,27 @@ def learn(config_type,
     best_policy_v = 1
 
     for i in range(1, learning_iterations+1):
-        #pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
+        if i > 1:
+            pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
         print("Policy verion " + str(i) + " learned, now testing")
-        # print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
-        #       'Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
-        #       'Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts, nr_arrivals=3000))
+        print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000),
+              'Greedy policy:', rollouts.evaluate_policy(env, smdp.greedy_policy, nr_rollouts, nr_arrivals=3000),
+              'FIFO policy:', rollouts.evaluate_policy(env, smdp.fifo_policy, nr_rollouts, nr_arrivals=3000),
+              'Random policy:', rollouts.evaluate_policy(env, smdp.random_policy, nr_rollouts, nr_arrivals=3000))
         if i < learning_iterations:
             pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
             
             print('Evaluating new policy..')
             new_policy_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=3000)
             print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i+1}: {new_policy_reward}.")
-            if new_policy_reward < best_policy_reward: # Higher reward is better (less negative)                
-                pl = best_policy
+            if new_policy_reward < best_policy_reward: # Higher reward is better (less negative)
                 print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
-            else:                
+                pl = best_policy
+            else:
+                print(f"Policy version {best_policy_v} improved, continuing with policy version {i + 1}.")
                 best_policy = pl
                 best_policy_reward = new_policy_reward
                 best_policy_v = i + 1
-                print(f"Policy version {i} improved, continuing with policy version {best_policy_v}.")
             print('\n')
 
     best_policy.save(filename_without_extension + config_type + ".best_policy" + extension)           

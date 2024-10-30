@@ -1,42 +1,42 @@
 import unittest
-import smdp
+import mdp
 
 # Actions are ['r1a', 'r1b', 'r2a', 'r2b', 'postpone', 'nothing']	
-class SMDPTests(unittest.TestCase):
+class MDPTests(unittest.TestCase):
 
     def test_smdp_observation(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         self.assertEqual(env.observation(), [1, 1, 0, 0, 0, 0])
 
     def test_smdp_action_mask_initial_state(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
     
     def test_smdp_action_mask_state_a_waiting(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         print(env.state_space)
         self.assertEqual(env.action_mask(), [True, False, True, False, True, False])
     
     def test_smdp_action_mask_state_b_waiting(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [], 'b': [1]}
         self.assertEqual(env.action_mask(), [False, True, False, True, True, False])
 
     def test_smdp_action_mask_state_one_waiting_r1_processing(self):
-        env = smdp.SMDP(210, 'slow_server')
+        env = mdp.MDP(210, 'slow_server')
         env.waiting_cases = {'a': [2], 'b': []}
         env.processing_r1 = [1]
         self.assertEqual(env.action_mask(), [False, False, True, False, True, False])
 
     def test_smdp_action_mask_state_one_waiting_r2_processing(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [2], 'b': []}
         env.processing_r2 = [1]
         self.assertEqual(env.action_mask(), [True, False, False, False, True, False])
 
     def test_get_state_set_state(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [2], 'b': []}
         env.processing_r1 = [1]
         env.processing_r2 = [2]
@@ -50,7 +50,7 @@ class SMDPTests(unittest.TestCase):
         self.assertEqual(env.get_state(), state)
 
     def test_env_reset(self):
-        env = smdp.SMDP(10, 'slow_server')
+        env = mdp.MDP(10, 'slow_server')
         env.waiting_cases = {'a': [2], 'b': [0]}
         env.processing_r1 = [1]
         env.processing_r2 = [1]
@@ -61,7 +61,7 @@ class SMDPTests(unittest.TestCase):
         self.assertEqual(env.get_state(), ({'a': [], 'b': []}, [], [], 0, 0, 10))
 
     def test_env_step_start_r1(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         env.total_time = 10
         env.total_arrivals = 2
@@ -81,12 +81,12 @@ class SMDPTests(unittest.TestCase):
             if env.processing_r1 == [1]:
                 self.assertEqual(env.observation(), [0, 1, 1, 0, 1, 0])
             if env.processing_r1 == []:
-                self.assertEqual(env.observation(), [1, 1, 0, 0, 0, 1])
+                self.assertTrue(env.observation() == [1, 1, 0, 0, 0, 1] or env.observation() == [1, 1, 0, 0, 1, 0]) # done processing or return to state
         self.assertTrue(found_r1_processing)
         self.assertTrue(found_r1_done)
 
     def test_env_step_start_r2(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         env.total_time = 10
         env.total_arrivals = 2
@@ -106,34 +106,42 @@ class SMDPTests(unittest.TestCase):
             if env.processing_r2 == [1]:
                 self.assertEqual(env.observation(), [1, 0, 0, 2, 1, 0])
             if env.processing_r2 == []:
-                self.assertEqual(env.observation(), [1, 1, 0, 0, 0, 1])
+                self.assertTrue(env.observation() == [1, 1, 0, 0, 0, 1] or env.observation() == [1, 1, 0, 0, 1, 0]) # done processing or return to state
         self.assertTrue(found_r2_processing)
         self.assertTrue(found_r2_done)
     
     def test_env_step_postpone(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         env.total_time = 10
         env.total_arrivals = 2
         env.nr_arrivals = 30
-        env.step((0, 0, 0, 0, 1, 0))
-        # Because there is nothing else to do, this step must lead to a new arrival
-        found_postpone = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1,2] and env.total_arrivals == 3 and env.total_time > 10)
-        self.assertTrue(found_postpone)
+        state = env.get_state()
+        for _ in range(100):
+            env.set_state(state)
+            env.step((0, 0, 0, 0, 1, 0))
+            # Because there is nothing else to do, this step must lead to a new arrival
+            found_postpone_arrival = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1,2] and env.total_arrivals == 3 and env.total_time > 10)
+            found_postpone_return = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1] and env.total_arrivals == 2 and env.total_time == 10 + env.tau)
+        self.assertTrue(found_postpone_arrival or found_postpone_return)
     
     def test_env_step_do_nothing(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         env.total_time = 10
         env.total_arrivals = 2
         env.nr_arrivals = 30
-        env.step((0, 0, 0, 0, 0, 1))
-        # Because there is nothing else to do, this step must lead to a new arrival
-        found_do_nothing = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1,2] and env.total_arrivals == 3 and env.total_time > 10)
-        self.assertTrue(found_do_nothing)
+        state = env.get_state()
+        for _ in range(100):
+            env.set_state(state)
+            env.step((0, 0, 0, 0, 0, 1))
+            # Because there is nothing else to do, this step must lead to a new arrival
+            found_postpone_arrival = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1,2] and env.total_arrivals == 3 and env.total_time > 10)
+            found_postpone_return = (env.processing_r1 == [] and env.processing_r2 == [] and env.waiting_cases['a'] == [1] and env.total_arrivals == 2 and env.total_time == 10 + env.tau)
+        self.assertTrue(found_postpone_arrival or found_postpone_return)
 
     def test_env_step_do_postpone_with_processing_r1(self):
-        env = smdp.SMDP(2, 'slow_server')
+        env = mdp.MDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
         env.processing_r1 = [(0, 'a')]
         env.total_time = 10
@@ -155,26 +163,26 @@ class SMDPTests(unittest.TestCase):
         self.assertTrue(found_r1_done)
 
     # def test_greedy_nothing_possible(self):
-    #     env = smdp.SMDP(2, 'slow_server')
+    #     env = mdp.MDP(2, 'slow_server')
     #     action = smdp.greedy_policy(env)
     #     self.assertEqual(action, [0, 0, 0, 1])
 
     # def test_greedy_r1_possible(self):
-    #     env = smdp.SMDP(2, 'slow_server')
+    #     env = mdp.MDP(2, 'slow_server')
     #     env.waiting_cases = [1]
     #     env.processing_r2 = [0]
     #     action = smdp.greedy_policy(env)
     #     self.assertEqual(action, [1, 0, 0, 0])
 
     # def test_greedy_r2_possible(self):
-    #     env = smdp.SMDP(2, 'slow_server')
+    #     env = mdp.MDP(2, 'slow_server')
     #     env.waiting_cases = [1]
     #     env.processing_r1 = [0]
     #     action = smdp.greedy_policy(env)
     #     self.assertEqual(action, [0, 1, 0, 0])
 
     # def test_greedy_r1_and_r2_possible(self):
-    #     env = smdp.SMDP(2, 'slow_server')
+    #     env = mdp.MDP(2, 'slow_server')
     #     env.waiting_cases = [1]
     #     action = smdp.greedy_policy(env)
     #     self.assertEqual(action, [1, 0, 0, 0])

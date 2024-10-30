@@ -109,27 +109,20 @@ class MDP:
             # Return the indices of the list that contain a nonzero value
             return [self.task_types_all[index] for index in nonzero_indices]
 
-    def step(self, action):
-        action_index = action.index(1)
-        action = self.action_space[action_index]
+    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+        """
+        Returns a dictionary with the possible evolutions and their rates.
+        For the MDP, the selected action is used to determine the possible evolutions.
+        """
+        r1_processing = len(processing_r1) > 0
+        r2_processing = len(processing_r2) > 0
 
-        if PRINT_TRAJECTORY: print("Obseration:", self.observation(), 'Action:', action, self.total_time, self.action_mask())
-        # create an intermediate state to calculate the expected reward and the next state
-        # we use this state to calculate if the state actually transitions to the next state
-        # or if the state remains the same. In latter, no resources are added/removed.
-        
-        # Initialize evolutions dictionary
-        r1_processing = len(self.processing_r1) > 0
-        r2_processing = len(self.processing_r2) > 0
-        nr_active_cases = r1_processing + r2_processing + sum(len(v) for v in self.waiting_cases.values())
-
-        # Calculate the possible evolutions and the rate at which they happen
         evolutions = {key: value for key, value in {
-            'arrival': self.arrival_rate if self.arrivals_coming() else 0,
-            'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and self.processing_r1[0][1] == 'a' else 0,
-            'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and self.processing_r2[0][1] == 'a' else 0,
-            'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and self.processing_r1[0][1] == 'b' else 0,
-            'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and self.processing_r2[0][1] == 'b' else 0
+            'arrival': self.arrival_rate if arrivals_coming else 0,
+            'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and processing_r1[0][1] == 'a' else 0,
+            'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and processing_r2[0][1] == 'a' else 0,
+            'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and processing_r1[0][1] == 'b' else 0,
+            'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and processing_r2[0][1] == 'b' else 0
         }.items() if value > 0}
 
         # add possible evolution based on action 
@@ -141,6 +134,20 @@ class MDP:
             evolutions['r1b'] = 1/self.resource_pools['b']['r1'][0]
         elif action == 'r2b': # (r2, b)
             evolutions['r2b'] = 1/self.resource_pools['b']['r2'][0]
+        return evolutions
+
+    def step(self, action):
+        action_index = action.index(1)
+        action = self.action_space[action_index]
+
+        if PRINT_TRAJECTORY: print("Obseration:", self.observation(), 'Action:', action, self.total_time, self.action_mask())
+        # create an intermediate state to calculate the expected reward and the next state
+        # we use this state to calculate if the state actually transitions to the next state
+        # or if the state remains the same. In latter, no resources are added/removed.
+        
+        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
+
+        evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
 
         sum_of_rates = sum(evolutions.values())
         if sum_of_rates == 0:
@@ -167,12 +174,6 @@ class MDP:
                     getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
                     if self.reporter:
                         self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
-                else:                    
-                    print("Invalid action")
-                    print('Observation:', self.observation())
-                    print('Action:', action)
-                    print('Action mask:', self.action_mask())
-                    print('nr_arrivals:', self.nr_arrivals, 'total_arrivals:', self.total_arrivals)
             # now calculate the next state and how long it takes to reach that state
             # the time is to the next state is exponentially distributed with rate 
             # min(lambda, mu_(r1, a) * active r1, mu_(r2, a) * active r2) = 
@@ -212,7 +213,7 @@ class MDP:
         # (r2, a) is only possible if there is a task waiting and r2 is available
         # postpone is only possible if there is something to postpone, i.e. there is a task waiting and a resource is available
         # do nothing is only possible if nothing can be done, i.e. there is no task waiting or no resource is available
-        if len(self.task_types) == 1:
+        if len(self.task_types) == 1: # single activity
             r1_available = len(self.processing_r1) == 0
             r2_available = len(self.processing_r2) == 0
             a_waiting = len(self.waiting_cases['a']) > 0
@@ -241,10 +242,10 @@ class MDP:
             # - all assignments are possible
             if self.arrivals_coming():
                 # (one resource, one task), (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = 1 < sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4
+                postpone_possible = 1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4
             else:
                 # (one resource, one task), not (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = (1 < sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4 and
+                postpone_possible = (1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4 and
                                     not (r1_available and r2_available)) # can't postpone if both resources are available, but no arrivals 
 
             do_nothing_possible = sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible, postpone_possible]) == 0
@@ -378,12 +379,12 @@ def threshold_policy(env, observation=None, action_mask=None):
 
 
 if __name__ == '__main__':
-    nr_replications = 1000
+    nr_replications = 10000
     avg_cycle_times = []
     for _ in range(nr_replications):
         reporter = ProcessReporter()
-        tau = 0.1
-        env = MDP(50, tau=tau, reporter=reporter, config_type='slow_server')
+        tau = 0.5
+        env = MDP(100, tau=tau, reporter=reporter, config_type='slow_server')
 
         done = False
         steps = 0
