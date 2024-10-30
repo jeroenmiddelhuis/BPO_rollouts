@@ -110,7 +110,7 @@ class SMDP:
             # Return the indices of the list that contain a nonzero value
             return [self.task_types_all[index] for index in nonzero_indices]
 
-    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+    def get_evolution_rates(self, processing_r1, processing_r2, arrivals_coming, action=None):
         """
         Returns a dictionary with the possible evolutions and their rates.
         For the MDP, the selected action is used to determine the possible evolutions.
@@ -118,13 +118,21 @@ class SMDP:
         r1_processing = len(processing_r1) > 0
         r2_processing = len(processing_r2) > 0
 
-        evolutions = {key: value for key, value in {
+        evolution_rates = {key: value for key, value in {
             'arrival': self.arrival_rate if arrivals_coming else 0,
             'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and processing_r1[0][1] == 'a' else 0,
             'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and processing_r2[0][1] == 'a' else 0,
             'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and processing_r1[0][1] == 'b' else 0,
             'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and processing_r2[0][1] == 'b' else 0
         }.items() if value > 0}
+        return evolution_rates
+
+    def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
+        evolution_rates = self.get_evolution_rates(processing_r1, processing_r2, arrivals_coming, action)
+        sum_of_rates = sum(evolution_rates.values())
+        evolutions = {}
+        for evolution, rate in evolution_rates.items():
+            evolutions[evolution] = rate/sum_of_rates
         return evolutions
 
     def step(self, action):
@@ -145,11 +153,14 @@ class SMDP:
         # this is the probability of the next state being the consequence of:
         # an arrival, r1 processing the task or r2 processing the task
         # the probability of one of these evolutions happening is proportional to the rate of that evolution.
-        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
 
         evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming())
 
-        sum_of_rates = sum(evolutions.values())        
+        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
+        sum_of_rates = sum(evolutions.values())
+        expected_event_time = 1 / sum_of_rates
+        expected_reward = -nr_active_cases * expected_event_time
+
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
         else:
@@ -177,14 +188,7 @@ class SMDP:
                 elif next_task == 'Complete':
                     if self.reporter:
                         self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
-                    pass
-                    #self.completed_cases.append(case_id)
-                    #self.cases[case_id].append(("Complete", self.total_time))
-            reward = -time * nr_active_cases
-            # if self.is_done():
-            #     print(self.cases)
-            #     print(self.completed_cases)
-            #     print('nr_completed:', len(self.completed_cases), 'nr_cases:', len(self.cases))
+            reward = expected_reward
             return self.observation(), reward, self.is_done(), False, None
         
     def arrivals_coming(self):
@@ -334,7 +338,6 @@ def fifo_policy(env):
             return action
     return action
 
-
 def epsilon_greedy_policy(env):
     if env.crn.generate_uniform() < 0.25:
         return random_policy(env)
@@ -355,11 +358,11 @@ def threshold_policy(env, observation=None, action_mask=None, threshold=5):
 
 
 if __name__ == '__main__':
-    nr_replications = 10000
+    nr_replications = 1000
     avg_cycle_times = []
     for _ in range(nr_replications):
         reporter = ProcessReporter()
-        env = SMDP(100, 'slow_server', reporter)
+        env = SMDP(100, 'down_stream', reporter)
 
         done = False
         steps = 0
