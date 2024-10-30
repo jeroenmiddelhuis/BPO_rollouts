@@ -179,5 +179,87 @@ class SMDPTests(unittest.TestCase):
     #     action = smdp.greedy_policy(env)
     #     self.assertEqual(action, [1, 0, 0, 0])
 
+    def test_slow_server(self):
+        env = smdp.SMDP(1, 'slow_server')
+        observation = env.observation()
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+        # initially nothing is possible and we are waiting for an arrival
+        self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
+        observation, reward, done, _, _ = env.step((0, 0, 0, 0, 0, 1))
+        self.assertEqual(observation, [1, 1, 0, 0, 1, 0])
+        # now activity a is possible, postpone and do nothing are not possible
+        self.assertEqual(env.action_mask(), [True, False, True, False, False, False])
+        observation, reward, done, _, _ = env.step((1, 0, 0, 0, 0, 0))
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 1])
+        # now activity b is possible, postpone and do nothing are not possible
+        self.assertEqual(env.action_mask(), [False, True, False, True, False, False])
+        observation, reward, done, _, _ = env.step((0, 1, 0, 0, 0, 0))
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+        # now nothing is possible and we are done
+        self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
+        self.assertTrue(done)
+
+    def test_single_activity(self):
+        env = smdp.SMDP(1, 'single_activity')
+        observation = env.observation()
+        self.assertEqual(observation, [1, 1, 0, 0, 0])
+        # initially nothing is possible and we are waiting for an arrival
+        self.assertEqual(env.action_mask(), [False, False, False, True])
+        observation, reward, done, _, _ = env.step((0, 0, 0, 1))
+        self.assertEqual(observation, [1, 1, 0, 0, 1])
+        # now activity a is possible, postpone and do nothing are not possible
+        self.assertEqual(env.action_mask(), [True, False, False, False])
+        observation, reward, done, _, _ = env.step((1, 0, 0, 0))
+        self.assertEqual(observation, [1, 1, 0, 0, 0])
+        # now nothing is possible and we are done
+        self.assertEqual(env.action_mask(), [False, False, False, True])
+        self.assertTrue(done)
+
+    def test_parallel(self):
+        env = smdp.SMDP(1, 'parallel')
+        observation = env.observation()
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+        # initially nothing is possible and we are waiting for an arrival
+        self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
+        observation, reward, done, _, _ = env.step((0, 0, 0, 0, 0, 1))
+        self.assertEqual(observation, [1, 1, 0, 0, 1, 1])
+        # now activity a and b are possible, postpone and do nothing are not possible
+        self.assertEqual(env.action_mask(), [True, True, True, True, False, False])
+        observation, reward, done, _, _ = env.step((1, 0, 0, 0, 0, 0))
+        # now activity b is possible, postpone and do nothing are not possible
+        self.assertEqual(env.action_mask(), [False, False, False, True, False, False])
+        observation, reward, done, _, _ = env.step((0, 1, 0, 0, 0, 0))
+        # now nothing is possible and we are done
+        self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
+        self.assertTrue(done)
+
+    def test_n_system(self):
+        env = smdp.SMDP(1, 'n_system')
+        observation = env.observation()
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+        # initially nothing is possible and we are waiting for an arrival
+        self.assertEqual(env.action_mask(), [False, False, False, False, True])
+        observation, reward, done, _, _ = env.step((0, 0, 0, 0, 1))
+        # now there are two possibilities, either an activity a or an activity b arrives
+        # if activity a arrives
+        if observation[4] == 1:
+            self.assertEqual(observation, [1, 1, 0, 0, 1, 0])
+            # only r1 can be assigned
+            self.assertEqual(env.action_mask(), [True, False, False, False, False])
+            observation, reward, done, _, _ = env.step((1, 0, 0, 0, 0))
+            self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+            # after performing a we are done
+            self.assertEqual(env.action_mask(), [False, False, False, False, True])
+            self.assertTrue(done)
+        else:
+            self.assertEqual(observation, [1, 1, 0, 0, 0, 1])
+            # r1 and r2 can be assigned to b
+            self.assertEqual(env.action_mask(), [False, True, True, False, False])
+            observation, reward, done, _, _ = env.step((0, 1, 0, 0, 0))
+            self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+            # after performing b we are done
+            self.assertEqual(env.action_mask(), [False, False, False, False, True])
+            self.assertTrue(done)
+
 if __name__ == '__main__':
     unittest.main()
