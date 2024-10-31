@@ -1,12 +1,12 @@
 from reporters import EventLogReporter, ProcessReporter
-from crn import CRN
 import sys, os, json
 import numpy as np
+import random
 
 PRINT_TRAJECTORY = False
 
 class MDP:
-    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None, crn=None):
+    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -49,15 +49,12 @@ class MDP:
         self.original_nr_arrivals = nr_arrivals
         self.tau = tau
 
-        if crn is None:
-            crn = CRN()
-        self.crn = crn
+        self.actions_taken = {}
+        self.actual_actions_taken = {}
+
         self.reporter = reporter
 
     def observation(self):
-        # TODO change the state based on the number of resoruces and activites.
-        # TODO self.processing_r1 and r2 and be more than 1 if we have multiple activities
-        # TODO normalization of the observation
         is_processing_r1 = len(self.processing_r1) > 0 # True if there is a case being processed by r1
         is_processing_r2 = len(self.processing_r2) > 0
         assigned_r1 = 1 if is_processing_r1 and self.processing_r1[-1][1] == 'a' else 2 if is_processing_r1 and self.processing_r1[-1][1] == 'b' else 0
@@ -73,7 +70,6 @@ class MDP:
         self.total_time = 0
         self.total_arrivals = 0 
         self.nr_arrivals = self.original_nr_arrivals
-        # Add crn.reset()
     
     def get_state(self, rollout_length=None):
         nr_arrivals = self.nr_arrivals if rollout_length is None else self.nr_arrivals + rollout_length
@@ -99,8 +95,7 @@ class MDP:
         
         # Check if the sum is approximately 1 or less, considering rounding errors
         if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
-            # Draw a random sample using the crn class
-            return self.crn.choice(self.task_types_all, weights=p_transitions)
+            return np.random.choice(self.task_types_all, p=p_transitions)
         else:
             # Check if all nonzero values are equal to 1
             nonzero_indices = [index for index, value in enumerate(p_transitions) if value != 0]
@@ -117,7 +112,7 @@ class MDP:
         r1_processing = len(processing_r1) > 0
         r2_processing = len(processing_r2) > 0
 
-        evolutions = {key: value for key, value in {
+        evolution_rates = {key: value for key, value in {
             'arrival': self.arrival_rate if arrivals_coming else 0,
             'r1a': 1/self.resource_pools['a']['r1'][0] if r1_processing and processing_r1[0][1] == 'a' else 0,
             'r2a': 1/self.resource_pools['a']['r2'][0] if r2_processing and processing_r2[0][1] == 'a' else 0,
@@ -127,14 +122,14 @@ class MDP:
 
         # add possible evolution based on action 
         if action == 'r1a': # (r1, a)
-            evolutions['r1a'] = 1/self.resource_pools['a']['r1'][0]
+            evolution_rates['r1a'] = 1/self.resource_pools['a']['r1'][0]
         elif action == 'r2a': # (r2, a)
-            evolutions['r2a'] = 1/self.resource_pools['a']['r2'][0]
+            evolution_rates['r2a'] = 1/self.resource_pools['a']['r2'][0]
         elif action == 'r1b': # (r1, b)
-            evolutions['r1b'] = 1/self.resource_pools['b']['r1'][0]
+            evolution_rates['r1b'] = 1/self.resource_pools['b']['r1'][0]
         elif action == 'r2b': # (r2, b)
-            evolutions['r2b'] = 1/self.resource_pools['b']['r2'][0]
-        return evolutions
+            evolution_rates['r2b'] = 1/self.resource_pools['b']['r2'][0]
+        return evolution_rates
 
     def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
         evolution_rates = self.get_evolution_rates(processing_r1, processing_r2, arrivals_coming, action)
@@ -142,37 +137,30 @@ class MDP:
         evolutions = {}
         for evolution, rate in evolution_rates.items():
             evolutions[evolution] = rate/sum_of_rates
-        return evolutions
+        return evolutions, evolution_rates
 
     def get_transformed_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
-        evolution_rates = self.get_evolution_rates(processing_r1, processing_r2, arrivals_coming, action)
-        #print('rates', evolution_rates)
+        evolutions, evolution_rates = self.get_evolutions(processing_r1, processing_r2, arrivals_coming, action)
         sum_of_rates = sum(evolution_rates.values())
-        #print('sum_of_rates', sum_of_rates)
-        evolutions = {}
-        for evolution, rate in evolution_rates.items():
-            evolutions[evolution] = rate/sum_of_rates
-        #print('evolutions', evolutions, sum(evolutions.values()))
 
         transformed_evolutions = {}
-        expected_event_time = 1 / sum_of_rates
-        for evolution, rate in evolutions.items():
-            transformed_evolutions[evolution] = self.tau / expected_event_time * evolutions[evolution]
-        transformed_evolutions['return_to_state'] = 1 - self.tau / expected_event_time
+        expected_next_event_time = 1 / sum_of_rates
+        for evolution, p in evolutions.items():
+            transformed_evolutions[evolution] = self.tau / expected_next_event_time * p
+        transformed_evolutions['return_to_state'] = 1 - self.tau / expected_next_event_time
         #print('transformed_evolutions', transformed_evolutions, sum(transformed_evolutions.values()), '\n')
-        return transformed_evolutions, expected_event_time
+        return transformed_evolutions, evolution_rates
 
     def step(self, action):
         action_index = action.index(1)
         action = self.action_space[action_index]
+        if action not in self.actions_taken:
+            self.actions_taken[action] = 0
+            self.actual_actions_taken[action] = 0
+        self.actions_taken[action] += 1
+        transformed_evolutions, evolution_rates = self.get_transformed_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
         
-        transformed_evolutions, expected_event_time = self.get_transformed_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
-        
-        # transformed_evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
-        # print(transformed_evolutions)
-        # evolution_rates =  self.get_evolution_rates(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
-        # expected_event_time = 1 / sum(evolution_rates.values())
-        # print(evolution_rates, sum(evolution_rates.values()), expected_event_time, '\n')
+        expected_event_time = 1 / sum(evolution_rates.values())
 
         nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
         expected_reward = -expected_event_time * nr_active_cases
@@ -181,9 +169,10 @@ class MDP:
         reward = reward_rate * self.tau # Not needed but kept for consistency with SMDP
 
         events, probs = zip(*list(transformed_evolutions.items()))
-        evolution = self.crn.choice(events, weights=probs)
+        evolution = np.random.choice(events, p=probs)
 
         if evolution != 'return_to_state':
+            self.actual_actions_taken[action] += 1
             next_task = None
             # process the action, 'postpone' and 'do nothing', do nothing to the state.
             if action in ['r1a', 'r2a', 'r1b', 'r2b']:
@@ -195,7 +184,7 @@ class MDP:
             
             # the total time changes before the evolution happens
             # it changes after processing the action
-            self.total_time += self.tau 
+            self.total_time += self.tau
 
             # now calculate the next state and how long it takes to reach that state
             # the time is to the next state is exponentially distributed with rate 
@@ -287,7 +276,7 @@ class MDP:
 def random_policy(env):
     action_mask = env.action_mask()
     action = [0] * len(action_mask)
-    action_index = env.crn.choice([i for i in range(len(action_mask)) if action_mask[i]])
+    action_index = np.random.choice([i for i in range(len(action_mask)) if action_mask[i]])
     action[action_index] = 1
     return action
 
@@ -312,19 +301,11 @@ def greedy_policy(env):
     if best_action_index is not None:
         action[best_action_index] = 1
     else:
-        # Check if 'postpone' is feasible
-        if 'postpone' in env.action_space:
-            postpone_index = env.action_space.index('postpone')
-            if action_mask[postpone_index]:
-                action[postpone_index] = 1
-                return action
-        
-        # Check if 'do_nothing' is feasible
-        if 'do_nothing' in env.action_space:
-            do_nothing_index = env.action_space.index('do_nothing')
-            if action_mask[do_nothing_index]:
-                action[do_nothing_index] = 1
-    
+        # If no valid action found, default to 'do_nothing' or 'postpone' if available
+        if action_mask[env.action_space.index('postpone')] == 1:
+            action[env.action_space.index('postpone')] = 1
+        elif action_mask[env.action_space.index('do_nothing')] == 1:
+            action[env.action_space.index('do_nothing')] = 1    
     return action
 
 def fifo_policy(env):
@@ -364,7 +345,7 @@ def fifo_policy(env):
         action[index] = 1
         return action
     elif len(feasible_actions) > 1:
-        index = env.action_space.index(env.crn.choice(feasible_actions))
+        index = env.action_space.index(np.random.choice(feasible_actions))
         action[index] = 1
         return action
     
@@ -376,13 +357,13 @@ def fifo_policy(env):
             action[index] = 1
             return action
         elif len(feasible_actions) > 1:
-            index = env.action_space.index(env.crn.choice(feasible_actions))
+            index = env.action_space.index(np.random.choice(feasible_actions))
             action[index] = 1
             return action
     return action
 
 def epsilon_greedy_policy(env):
-    if env.crn.generate_uniform() < 0.1:
+    if np.random.uniform() < 0.25:
         return env.random_policy()
     else:
         return env.greedy_policy()
@@ -401,18 +382,19 @@ def threshold_policy(env, observation=None, action_mask=None):
 
 
 if __name__ == '__main__':
-    nr_replications = 1000
+    nr_replications = 1
     avg_cycle_times = []
+    total_rewards = []
     for _ in range(nr_replications):
-        reporter = ProcessReporter()
-        tau = 0.1
-        env = MDP(100, tau=tau, reporter=reporter, config_type='down_stream')
+        reporter = EventLogReporter("mdp_log_0.5.txt")
+        #reporter = ProcessReporter()
+        tau = 0.5
+        env = MDP(100000, tau=tau, reporter=reporter, config_type='slow_server')
 
         done = False
         steps = 0
         total_reward = 0
-        max_steps = 100000
-        while steps < max_steps and not done:        
+        while not done:        
             action = greedy_policy(env)
             
             state, reward, done, _, _ = env.step(action)
@@ -420,14 +402,22 @@ if __name__ == '__main__':
             time = env.total_time
 
             # print(action, state, reward, time)
-
             steps += 1
         # print('nr_steps:', steps)
         # print('reward:', total_reward)
         reporter.close()
         # reporter.print_result()
         avg_cycle_times.append(reporter.total_cycle_time / reporter.nr_completed)
+        total_rewards.append(total_reward)
+        #print(total_reward, reporter.total_cycle_time, reporter.nr_completed, reporter.total_cycle_time / reporter.nr_completed)
     # print mean and 95% confidence interval of the average cycle time
     avg_cycle_times = np.array(avg_cycle_times)
-    print('mean:', np.mean(avg_cycle_times))
-    print('95% CI:', np.percentile(avg_cycle_times, [2.5, 97.5]))
+    total_rewards = np.array(total_rewards)
+    print('tau:', env.tau)
+    print('mean CT:', np.mean(avg_cycle_times))
+    print('95% CI CT:', np.percentile(avg_cycle_times, [2.5, 97.5]))
+    print('mean reward:', np.mean(total_rewards))
+    print('95% CI reward:', np.percentile(total_rewards, [2.5, 97.5]))
+    reporter.print_result()
+    print('actions taken:', env.actions_taken)
+    print('actual actions taken:', env.actual_actions_taken)

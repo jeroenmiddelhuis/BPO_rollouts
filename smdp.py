@@ -1,11 +1,11 @@
 from reporters import EventLogReporter, ProcessReporter
-from crn import CRN
 import sys, os, json
 import numpy as np
+import random
 
 class SMDP:
 
-    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None, crn=None):
+    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -48,9 +48,8 @@ class SMDP:
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
 
-        if crn is None:
-            crn = CRN()
-        self.crn = crn
+        self.actions_taken = {}
+
         self.reporter = reporter
 
     def observation(self):
@@ -101,7 +100,7 @@ class SMDP:
         # Check if the sum is approximately 1 or less, considering rounding errors
         if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
             # Draw a random sample using the crn class
-            return self.crn.choice(self.task_types_all, weights=p_transitions)
+            return np.random.choice(self.task_types_all, p=p_transitions)
         else:
             # Check if all nonzero values are equal to 1
             nonzero_indices = [index for index, value in enumerate(p_transitions) if value != 0]
@@ -125,6 +124,16 @@ class SMDP:
             'r1b': 1/self.resource_pools['b']['r1'][0] if r1_processing and processing_r1[0][1] == 'b' else 0,
             'r2b': 1/self.resource_pools['b']['r2'][0] if r2_processing and processing_r2[0][1] == 'b' else 0
         }.items() if value > 0}
+
+        # add possible evolution based on action 
+        if action == 'r1a': # (r1, a)
+            evolution_rates['r1a'] = 1/self.resource_pools['a']['r1'][0]
+        elif action == 'r2a': # (r2, a)
+            evolution_rates['r2a'] = 1/self.resource_pools['a']['r2'][0]
+        elif action == 'r1b': # (r1, b)
+            evolution_rates['r1b'] = 1/self.resource_pools['b']['r1'][0]
+        elif action == 'r2b': # (r2, b)
+            evolution_rates['r2b'] = 1/self.resource_pools['b']['r2'][0]
         return evolution_rates
 
     def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
@@ -133,11 +142,14 @@ class SMDP:
         evolutions = {}
         for evolution, rate in evolution_rates.items():
             evolutions[evolution] = rate/sum_of_rates
-        return evolutions
+        return evolutions, evolution_rates
 
     def step(self, action):
         action_index = action.index(1)
         action = self.action_space[action_index]
+        if action not in self.actions_taken:
+            self.actions_taken[action] = 0
+        self.actions_taken[action] += 1
         # process the action, 'postpone' and 'do nothing', do nothing to the state.
         if action in ['r1a', 'r2a', 'r1b', 'r2b']:
             resource, task = action[0:2], action[2]
@@ -153,21 +165,20 @@ class SMDP:
         # this is the probability of the next state being the consequence of:
         # an arrival, r1 processing the task or r2 processing the task
         # the probability of one of these evolutions happening is proportional to the rate of that evolution.
-
-        evolutions = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming())
+        evolutions, evolution_rates = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming())
 
         nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
-        sum_of_rates = sum(evolutions.values())
+        sum_of_rates = sum(evolution_rates.values())
         expected_event_time = 1 / sum_of_rates
         expected_reward = -nr_active_cases * expected_event_time
 
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
         else:
-            time = self.crn.generate_exponential(sum_of_rates)
+            time = random.expovariate(sum_of_rates)
             self.total_time += time
             events, probs = zip(*list(evolutions.items()))
-            evolution = self.crn.choice(events, weights=probs)
+            evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival':
                 task = self.sample_next_task('Start')
@@ -251,7 +262,7 @@ class SMDP:
 def random_policy(env):
     action_mask = env.action_mask()
     action = [0] * len(action_mask)
-    action_index = env.crn.choice([i for i in range(len(action_mask)) if action_mask[i]])
+    action_index = np.random.choice([i for i in range(len(action_mask)) if action_mask[i]])
     action[action_index] = 1
     #print('policy:', action_mask, action_index, action)
     return action
@@ -278,10 +289,10 @@ def greedy_policy(env):
         action[best_action_index] = 1
     else:
         # If no valid action found, default to 'do_nothing' or 'postpone' if available
-        if 'postpone' in env.action_space:
+        if action_mask[env.action_space.index('postpone')] == 1:
             action[env.action_space.index('postpone')] = 1
-        elif 'do_nothing' in env.action_space:
-            action[env.action_space.index('do_nothing')] = 1    
+        elif action_mask[env.action_space.index('do_nothing')] == 1:
+            action[env.action_space.index('do_nothing')] = 1      
     return action
 
 def fifo_policy(env):
@@ -321,7 +332,7 @@ def fifo_policy(env):
         action[index] = 1
         return action
     elif len(feasible_actions) > 1:
-        index = env.action_space.index(env.crn.choice(feasible_actions))
+        index = env.action_space.index(np.random.choice(feasible_actions))
         action[index] = 1
         return action
     
@@ -333,13 +344,13 @@ def fifo_policy(env):
             action[index] = 1
             return action
         elif len(feasible_actions) > 1:
-            index = env.action_space.index(env.crn.choice(feasible_actions))
+            index = env.action_space.index(np.random.choice(feasible_actions))
             action[index] = 1
             return action
     return action
 
 def epsilon_greedy_policy(env):
-    if env.crn.generate_uniform() < 0.25:
+    if np.random.uniform() < 0.25:
         return random_policy(env)
     else:
         return greedy_policy(env)
@@ -358,11 +369,13 @@ def threshold_policy(env, observation=None, action_mask=None, threshold=5):
 
 
 if __name__ == '__main__':
-    nr_replications = 1000
+    nr_replications = 1
     avg_cycle_times = []
+    total_rewards = []
     for _ in range(nr_replications):
-        reporter = ProcessReporter()
-        env = SMDP(100, 'down_stream', reporter)
+        reporter = EventLogReporter("smdp_log.txt")
+        #reporter = ProcessReporter()
+        env = SMDP(100000, 'slow_server', reporter)
 
         done = False
         steps = 0
@@ -382,7 +395,14 @@ if __name__ == '__main__':
         reporter.close()
         # reporter.print_result()
         avg_cycle_times.append(reporter.total_cycle_time / reporter.nr_completed)
-    # print mean and 95% confidence interval of the average cycle time
+        total_rewards.append(total_reward)
+        #print(total_reward, reporter.total_cycle_time, reporter.nr_completed, reporter.total_cycle_time / reporter.nr_completed)
+    # print mean and 95% confidence interval of the average cycle time and rewards
     avg_cycle_times = np.array(avg_cycle_times)
-    print('mean:', np.mean(avg_cycle_times))
-    print('95% CI:', np.percentile(avg_cycle_times, [2.5, 97.5]))
+    total_rewards = np.array(total_rewards)
+    print('mean CT:', np.mean(avg_cycle_times))
+    print('95% CI CT:', np.percentile(avg_cycle_times, [2.5, 97.5]))
+    print('mean reward:', np.mean(total_rewards))
+    print('95% CI reward:', np.percentile(total_rewards, [2.5, 97.5]))
+    reporter.print_result()
+    print('Actions taken:', env.actions_taken)
