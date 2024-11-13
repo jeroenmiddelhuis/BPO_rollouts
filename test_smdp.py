@@ -15,7 +15,6 @@ class SMDPTests(unittest.TestCase):
     def test_smdp_action_mask_state_a_waiting(self):
         env = smdp.SMDP(2, 'slow_server')
         env.waiting_cases = {'a': [1], 'b': []}
-        print(env.state_space)
         self.assertEqual(env.action_mask(), [True, False, True, False, True, False])
     
     def test_smdp_action_mask_state_b_waiting(self):

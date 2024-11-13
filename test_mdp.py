@@ -162,6 +162,97 @@ class MDPTests(unittest.TestCase):
         self.assertTrue(found_r1_processing)
         self.assertTrue(found_r1_done)
 
+    def test_evolution_rates_without_action(self):
+        tau = 0.5
+        policy = mdp.greedy_policy
+        env = mdp.MDP(100, 'slow_server', tau=tau)
+        done = False
+        while not done:
+            action = policy(env)
+            evolution_rates_1 = env.get_evolution_rates(env.processing_r1, env.processing_r2, env.arrivals_coming())
+            evolutions, evolution_rates_2 = env.get_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming())
+            transformed_evolutions, evolution_rates_3 = env.get_transformed_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming())
+            self.assertEqual(evolution_rates_1, evolution_rates_2)
+            self.assertEqual(evolution_rates_1, evolution_rates_3)
+            self.assertEqual(evolution_rates_2, evolution_rates_3)
+            
+            state, reward, done, _, _ = env.step(action)
+
+    def test_action_in_evolution(self):
+        tau = 0.5
+        policy = mdp.greedy_policy
+        env = mdp.MDP(100, 'slow_server', tau=tau)
+        done = False
+        while not done:
+            action = policy(env)
+            action_name = env.action_space[action.index(1)]
+            evolutions, evolution_rates = env.get_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            if action_name not in ['do_nothing', 'postpone']:
+                self.assertTrue(action_name in list(evolutions))
+            state, reward, done, _, _ = env.step(action)
+
+    def test_evolution_rates_with_action(self):
+        tau = 0.5
+        policy = mdp.greedy_policy
+        env = mdp.MDP(100, 'slow_server', tau=tau)
+        done = False
+        while not done:
+            action = policy(env)
+            action_name = env.action_space[action.index(1)]
+            evolution_rates_1 = env.get_evolution_rates(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            _, evolution_rates_2 = env.get_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            _, evolution_rates_3 = env.get_transformed_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            self.assertEqual(evolution_rates_1, evolution_rates_2)
+            self.assertEqual(evolution_rates_1, evolution_rates_3)
+            self.assertEqual(evolution_rates_2, evolution_rates_3)
+            if action_name not in ['do_nothing', 'postpone']:
+                not_evolution_rates_1 = env.get_evolution_rates(env.processing_r1, env.processing_r2, env.arrivals_coming())
+                _, not_evolution_rates_2 = env.get_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming())
+                _, not_evolution_rates_3 = env.get_transformed_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming())
+                self.assertNotEqual(evolution_rates_1, not_evolution_rates_1)
+                self.assertNotEqual(evolution_rates_2, not_evolution_rates_2)
+                self.assertNotEqual(evolution_rates_3, not_evolution_rates_3)
+
+            state, reward, done, _, _ = env.step(action)
+
+    def test_transformed_evolutions(self):
+        tau = 0.5
+        policy = mdp.greedy_policy
+        env = mdp.MDP(100, 'slow_server', tau=tau)
+        done = False
+        while not done:
+            action = policy(env)
+            action_name = env.action_space[action.index(1)]
+            evolutions, evolution_rates = env.get_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+
+            transformed_evolutions, evolution_rates = env.get_transformed_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            transformed_evolutions_test = {}
+            expected_time = 1 / sum(evolution_rates.values())
+            for evolution, p in evolutions.items():
+                transformed_evolutions_test[evolution] = (tau/expected_time) * p
+            transformed_evolutions_test['return_to_state'] = 1 - (tau/expected_time)
+
+            self.assertEqual(transformed_evolutions, transformed_evolutions_test)
+            
+            state, reward, done, _, _ = env.step(action)
+
+    def test_transformed_prob_is_tau_multiplied_rate(self):
+        """Assuming an exponential distribution, the transformed probability of an event should be half of the rate"""
+
+        tau = 0.5
+        policy = mdp.greedy_policy
+        env = mdp.MDP(100, 'slow_server', tau=tau)
+        done = False
+        while not done:
+            action = policy(env)
+            action_name = env.action_space[action.index(1)]
+
+            transformed_evolutions, evolution_rates = env.get_transformed_evolutions(env.processing_r1, env.processing_r2, env.arrivals_coming(), action_name)
+            for evolution in evolution_rates:
+                self.assertAlmostEqual(transformed_evolutions[evolution], tau * evolution_rates[evolution], delta=0.00001)
+            
+            state, reward, done, _, _ = env.step(action)
+
     # def test_greedy_nothing_possible(self):
     #     env = mdp.MDP(2, 'slow_server')
     #     action = smdp.greedy_policy(env)

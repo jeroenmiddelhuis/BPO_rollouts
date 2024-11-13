@@ -53,6 +53,9 @@ class MDP:
         self.actual_actions_taken = {}
 
         self.reporter = reporter
+        self.arrival_times = []
+        self.start_times = {'r1a': {}, 'r2a': {}, 'r1b': {}, 'r2b': {}}
+        self.completion_times = {'r1a': {}, 'r2a': {}, 'r1b': {}, 'r2b': {}}
 
     def observation(self):
         is_processing_r1 = len(self.processing_r1) > 0 # True if there is a case being processed by r1
@@ -70,6 +73,7 @@ class MDP:
         self.total_time = 0
         self.total_arrivals = 0 
         self.nr_arrivals = self.original_nr_arrivals
+        self.arrival_times = []
     
     def get_state(self, rollout_length=None):
         nr_arrivals = self.nr_arrivals if rollout_length is None else self.nr_arrivals + rollout_length
@@ -129,6 +133,7 @@ class MDP:
             evolution_rates['r1b'] = 1/self.resource_pools['b']['r1'][0]
         elif action == 'r2b': # (r2, b)
             evolution_rates['r2b'] = 1/self.resource_pools['b']['r2'][0]
+
         return evolution_rates
 
     def get_evolutions(self, processing_r1, processing_r2, arrivals_coming, action=None):
@@ -174,13 +179,16 @@ class MDP:
         if evolution != 'return_to_state':
             self.actual_actions_taken[action] += 1
             next_task = None
+            
             # process the action, 'postpone' and 'do nothing', do nothing to the state.
             if action in ['r1a', 'r2a', 'r1b', 'r2b']:
                 resource, task = action[0:2], action[2]
                 if len(self.waiting_cases[task]) > 0:
-                    getattr(self, f'processing_{resource}').append((self.waiting_cases[task].pop(0), task))
+                    case_id = self.waiting_cases[task].pop(0)
+                    self.start_times[action][case_id] = self.total_time
+                    getattr(self, f'processing_{resource}').append((case_id, task))
                     if self.reporter:
-                        self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
+                        self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
             
             # the total time changes before the evolution happens
             # it changes after processing the action
@@ -194,6 +202,7 @@ class MDP:
             # an arrival, r1 processing the task or r2 processing the task
             # the probability of one of these evolutions happening is proportional to the rate of that evolution.
             if evolution == 'arrival':
+                self.arrival_times.append(self.total_time)
                 # sample the first task from the transition matrix
                 self.waiting_cases[self.sample_next_task('Start')].append(self.total_arrivals)
                 if self.reporter is not None:
@@ -202,6 +211,7 @@ class MDP:
             else:
                 resource, task = evolution[0:2], evolution[2]
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]
+                self.completion_times[evolution][case_id] = self.total_time - self.start_times[evolution][case_id]
                 next_task = self.sample_next_task(task)
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
@@ -211,6 +221,10 @@ class MDP:
                     if self.reporter:
                         self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
                     self.completed_cases.append(case_id)
+            if self.is_done():
+                inter_arrival_times = [self.arrival_times[i] - self.arrival_times[i-1] for i in range(1, len(self.arrival_times))]
+                print('mean inter arrival time:', np.mean(inter_arrival_times))
+                print('Mean processing times:', {key: np.mean(list(value.values())) for key, value in self.completion_times.items()})
             return self.observation(), reward, self.is_done(), False, None
         else:
             self.total_time += self.tau

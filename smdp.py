@@ -50,7 +50,9 @@ class SMDP:
 
         self.actions_taken = {}
 
+
         self.reporter = reporter
+        self.arrival_times = []
 
     def observation(self):
         # TODO change the state based on the number of resoruces and activites.
@@ -72,6 +74,7 @@ class SMDP:
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
+        self.arrival_times= []
     
     def get_state(self, rollout_length=None):
         nr_arrivals = self.nr_arrivals if rollout_length is None else self.nr_arrivals + rollout_length
@@ -181,6 +184,7 @@ class SMDP:
             evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival':
+                self.arrival_times.append(self.total_time)
                 task = self.sample_next_task('Start')
                 self.waiting_cases[task].append(self.total_arrivals)
                 #self.cases[self.total_arrivals] = [("Start", self.total_time)]
@@ -200,6 +204,9 @@ class SMDP:
                     if self.reporter:
                         self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
             reward = expected_reward
+            if self.is_done():
+                inter_arrival_times = [self.arrival_times[i] - self.arrival_times[i-1] for i in range(1, len(self.arrival_times))]
+                print('mean inter arrival time:', np.mean(inter_arrival_times))
             return self.observation(), reward, self.is_done(), False, None
         
     def arrivals_coming(self):
