@@ -4,7 +4,9 @@ import math
 from tqdm import tqdm
 from policy_learner import PolicyLearner
 from crn import CRN
-import smdp
+import smdp, mdp
+from multiprocessing import Pool
+import concurrent.futures
 
 def rollout(env, policy, nr_steps_per_rollout=np.inf):
     """
@@ -134,9 +136,25 @@ def random_states(env, policy, nr_states):
             if done:
                 env.reset()
         if sum(env.action_mask()) > 1:
-            sampled_states.append(env.get_state(rollout_length=100)) # Add more case arrivals to the state by setting rollout_length
+            # Add more case arrivals to the state by setting rollout_length
+            # Since we use a fixed number of steps per rollout, we set the rollout_length to a high number.
+            sampled_states.append(env.get_state(rollout_length=100))
     return sampled_states
 
+def process_state(args):
+    state, env_type, episode_length, config_type, tau, policy, nr_rollouts_per_action_per_state, nr_steps_per_rollout, only_statistically_significant = args
+    
+    if env_type == "smdp":
+        env2 = smdp.SMDP(episode_length, config_type)
+    elif env_type == "mdp":
+        env2 = mdp.MDP(episode_length, config_type, tau)
+    else:
+        raise ValueError("Unknown environment type.")
+        
+    env2.set_state(state)
+
+    return find_learning_sample(env2, policy, nr_rollouts_per_action_per_state, 
+                              nr_steps_per_rollout, only_statistically_significant)
 
 def learn_iteration(env, 
                     policy, 
@@ -154,16 +172,27 @@ def learn_iteration(env,
     The policy is learned as neural network.
     Returns the policy as a class.
     """
-    states = random_states(env, smdp.epsilon_greedy_policy, nr_states_to_explore) # we use the random policy to sample the start states. SMDP and MDP random policy is the same.
+    # 1. Sample states
+    states = random_states(env, smdp.random_policy, nr_states_to_explore) # we use the random policy to sample the start states. SMDP and MDP random policy is the same.
+    print('states generated:', len(states))
+    # 2. Process states in parallel
+    env_type = "smdp" if isinstance(env, smdp.SMDP) else "mdp"
+    print('Environment type:', env_type)
+    args = [(state, env_type, env.nr_arrivals, env.config_type, 
+             getattr(env, 'tau', None), policy, nr_rollouts_per_action_per_state,
+             nr_steps_per_rollout, only_statistically_significant) for state in states]
+
+    with Pool() as pool:
+        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=False))
+    
+    # 3. Collect results
     learning_samples_X = []
     learning_samples_y = []
-    for i in tqdm(range(len(states))):
-        state = states[i]
-        env.set_state(state)
-        learning_sample = find_learning_sample(env, policy, nr_rollouts_per_action_per_state, nr_steps_per_rollout, only_statistically_significant)
-        if learning_sample is not None:
-            learning_samples_X.append(learning_sample[0])
-            learning_samples_y.append(learning_sample[1])
+    for result in results:
+        if result is not None:
+            learning_samples_X.append(result[0])
+            learning_samples_y.append(result[1])
+    
     print("Number of learning samples found:", len(learning_samples_X), "out of", len(states), "states.")
     if only_statistically_significant:
         print("If the number of learning samples if low, you might want to increase the number of rollouts per action per state, to get more significantly better actions.")
@@ -175,14 +204,35 @@ def learn_iteration(env,
     return learner
 
 
-def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None):
+def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, ppo=False):
     """
     Evaluates the policy by doing a number of rollouts and averaging the rewards.
     """
-    total_reward = 0
-    for i in range(nr_rollouts):
-        env.reset()
-        if nr_arrivals is not None:
-            env.nr_arrivals = nr_arrivals
-        total_reward += rollout(env, policy)
-    return total_reward / nr_rollouts
+    if ppo:
+        total_reward = []
+        for i in range(nr_rollouts):
+            env.reset()
+            if nr_arrivals is not None:
+                env.nr_arrivals = nr_arrivals
+            total_reward.append(rollout(env, policy))
+        return total_reward
+    else:
+        if nr_arrivals is None:
+            nr_arrivals = env.nr_arrivals
+            
+        with Pool() as pool:
+            total_rewards = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=True))
+        return total_rewards
+
+
+def evaluate_policy_single_rollout(args):
+    env, policy, nr_arrivals = args
+    if env.env_type == "smdp":
+        env_copy = smdp.SMDP(nr_arrivals, env.config_type)
+    elif env.env_type == "mdp":
+        env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau)
+    else:
+        raise ValueError("Unknown environment type.")
+
+    env_copy.reset()    
+    return rollout(env_copy, policy)

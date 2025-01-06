@@ -19,7 +19,9 @@ class SMDP:
         """
         # Read the config file and set the process parameters
         self.config_type = config_type
-        with open(os.path.join(sys.path[0], "config.txt"), "r") as f:
+        self.env_type = 'smdp'
+
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt"), "r") as f:
             data = f.read()
         
         config = json.loads(data)
@@ -34,51 +36,74 @@ class SMDP:
 
         self.transitions = config['transitions']
 
-        self.state_space = [f"{resource}_{status}" for status in ['available', 'assigned'] for resource in self.resources] +\
-                           [f"{task}_queue" for task in self.task_types]
+        if self.config_type == 'n_system':
+            # r2 can process both activities, but r1 can only process B. 
+            # Therefore, we don't need the assigned_ features for r1
+            self.state_space =  ([f'is_processing_{r}' for r in self.resources] +
+                                [f'assigned_r2{task_type}' for task_type in self.task_types] +
+                                [f'waiting_{task}' for task in self.task_types])
+        elif self.config_type == 'single_activity':
+            # only one activity, so no need for assigned_ features
+            self.state_space =  ([f'is_processing_{r}' for r in self.resources] +
+                                [f'waiting_{task}' for task in self.task_types])
+        else:
+            self.state_space =  ([f'is_processing_{r}' for r in self.resources] +
+                                [f'assigned_{r}{task_type}' for r in self.resources for task_type in self.task_types] +
+                                [f'waiting_{task}' for task in self.task_types])
         self.action_space = [f"{resource}{task}" for resource in self.resources for task in self.task_types if resource in self.resource_pools[task] and task != 'Start'] + ['postpone', 'do_nothing']
 
         self.waiting_cases = {task: [] for task in self.task_types}
-        #self.completed_cases = []
-        #self.cases = {}
+        self.partially_completed_cases = []
         self.processing_r1 = []
         self.processing_r2 = []
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
+        self.episodic_reward = 0
 
         self.actions_taken = {}
-
-
         self.reporter = reporter
-        self.arrival_times = []
+        
 
     def observation(self):
-        # TODO change the state based on the number of resoruces and activites.
-        # TODO self.processing_r1 and r2 and be more than 1 if we have multiple activities
-        # TODO normalization of the observation
         is_processing_r1 = len(self.processing_r1) > 0 # True if there is a case being processed by r1
         is_processing_r2 = len(self.processing_r2) > 0
-        assigned_r1 = 1 if is_processing_r1 and self.processing_r1[-1][1] == 'a' else 2 if is_processing_r1 and self.processing_r1[-1][1] == 'b' else 0
-        assigned_r2 = 1 if is_processing_r2 and self.processing_r2[-1][1] == 'a' else 2 if is_processing_r2 and self.processing_r2[-1][1] == 'b' else 0
-        waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
-        return [1-is_processing_r1, 1-is_processing_r2, assigned_r1, assigned_r2] + waiting_cases
-
+        if self.config_type == 'single_activity': # single activity
+            waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
+            return [1-is_processing_r1, 1-is_processing_r2] + waiting_cases
+        else: # Other scenarios
+            assigned_r1a = 1 if is_processing_r1 and self.processing_r1[-1][1] == 'a' else 0
+            assigned_r1b = 1 if is_processing_r1 and self.processing_r1[-1][1] == 'b' else 0
+            assigned_r2a = 1 if is_processing_r2 and self.processing_r2[-1][1] == 'a' else 0
+            assigned_r2b = 1 if is_processing_r2 and self.processing_r2[-1][1] == 'b' else 0
+            waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
+            if self.config_type != 'n_system':
+                return [1-is_processing_r1, 1-is_processing_r2, assigned_r1a, assigned_r1b, assigned_r2a, assigned_r2b] + waiting_cases
+            else:
+                return [1-is_processing_r1, 1-is_processing_r2, assigned_r2a, assigned_r2b] + waiting_cases
+        
     def reset(self):
         self.waiting_cases = {task: [] for task in self.task_types}
-        #self.cases = {}
-        #self.completed_cases = []
+        self.partially_completed_cases = []
         self.processing_r1 = []
         self.processing_r2 = []
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
-        self.arrival_times= []
+        self.actions_taken = {}
+        #print(self.episodic_reward)
+        self.episodic_reward = 0
     
     def get_state(self, rollout_length=None):
         nr_arrivals = self.nr_arrivals if rollout_length is None else self.nr_arrivals + rollout_length
-        return ({task: cases.copy() for task, cases in self.waiting_cases.items()}, self.processing_r1.copy(), self.processing_r2.copy(), self.total_time, self.total_arrivals, nr_arrivals)
+        return ({task: cases.copy() for task, cases in self.waiting_cases.items()},
+                self.processing_r1.copy(),
+                self.processing_r2.copy(),
+                self.total_time,
+                self.total_arrivals,
+                nr_arrivals,
+                self.partially_completed_cases.copy())
     
     def set_state(self, state):
         self.waiting_cases = {task: cases.copy() for task, cases in state[0].items()}
@@ -87,30 +112,36 @@ class SMDP:
         self.total_time = state[3]
         self.total_arrivals = state[4]
         self.nr_arrivals = state[5]
-
-        # TODO: add check for eligibility of the state
+        # For parallel systems, we need to keep track of the partially completed cases
+        if state[6] is not None:
+            self.partially_completed_cases = state[6].copy()
 
     def from_state(state):
         smdp = SMDP(0)
         smdp.set_state(state)
         return smdp
 
-    def sample_next_task(self, current_task):
+    def sample_next_task(self, current_task, case_id=None):
         # Calculate the sum of the values
         p_transitions = self.transitions[current_task]
         total_sum = sum(p_transitions)
-        
-        # Check if the sum is approximately 1 or less, considering rounding errors
-        if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
-            # Draw a random sample using the crn class
-            return np.random.choice(self.task_types_all, p=p_transitions)
-        else:
-            # Check if all nonzero values are equal to 1
-            nonzero_indices = [index for index, value in enumerate(p_transitions) if value != 0]
-            if any(p_transitions[index] != 1 for index in nonzero_indices):
-                raise ValueError("All nonzero values must be equal to 1 when using parallism.")
-            # Return the indices of the list that contain a nonzero value
-            return [self.task_types_all[index] for index in nonzero_indices]
+        if self.config_type != 'parallel':
+            # Check if the sum is approximately 1 or less, considering rounding errors
+            if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
+                # Draw a random sample using the crn class
+                return [np.random.choice(self.task_types_all, p=p_transitions)]
+            else:
+                raise ValueError("The sum of the transition probabilities must be 1 or less.")
+
+        elif self.config_type == 'parallel':
+            if current_task == 'Start':
+                # Return the indices of the list that contain a nonzero value
+                nonzero_indices = [index for index, value in enumerate(p_transitions) if value > 0]
+                return [self.task_types_all[index] for index in nonzero_indices]
+            elif current_task != 'Complete':
+                if case_id in self.partially_completed_cases:
+                    return ['Complete']
+        return []
 
     def get_evolution_rates(self, processing_r1, processing_r2, arrivals_coming, action=None):
         """
@@ -170,10 +201,22 @@ class SMDP:
         # the probability of one of these evolutions happening is proportional to the rate of that evolution.
         evolutions, evolution_rates = self.get_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming())
 
-        nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
+        if len(self.processing_r1) > 0:
+            processing_r1_case = [self.processing_r1[0][0]]
+        else:
+            processing_r1_case = []
+        if len(self.processing_r2) > 0:
+            processing_r2_case = [self.processing_r2[0][0]]
+        else:
+            processing_r2_case = []
+
+        if self.config_type != 'single_activity':
+            unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a'] + self.waiting_cases['b']))
+        else:
+            unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a']))
+
+        # nr_active_cases = len(self.processing_r1) + len(self.processing_r2) + sum(len(v) for v in self.waiting_cases.values())
         sum_of_rates = sum(evolution_rates.values())
-        expected_event_time = 1 / sum_of_rates
-        expected_reward = -nr_active_cases * expected_event_time
 
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
@@ -184,49 +227,49 @@ class SMDP:
             evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival':
-                self.arrival_times.append(self.total_time)
-                task = self.sample_next_task('Start')
-                self.waiting_cases[task].append(self.total_arrivals)
-                #self.cases[self.total_arrivals] = [("Start", self.total_time)]
-                if self.reporter:
+                next_tasks = self.sample_next_task('Start')
+                for task in next_tasks:
+                    self.waiting_cases[task].append(self.total_arrivals)
+                if self.reporter: #!!
                     self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
                 self.total_arrivals += 1
             else:
                 resource, task = evolution[0:2], evolution[2]
-                case_id = getattr(self, f'processing_{resource}').pop(0)[0]
-                #self.cases[case_id].append((task, self.total_time))
-                next_task = self.sample_next_task(task)
+                case_id = getattr(self, f'processing_{resource}').pop(0)[0]                
+                next_tasks = self.sample_next_task(task, case_id)
+                self.partially_completed_cases.append(case_id)
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
-                if next_task and next_task != 'Complete':
-                    self.waiting_cases[next_task].append(case_id)
-                elif next_task == 'Complete':
-                    if self.reporter:
-                        self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
-            reward = expected_reward
-            if self.is_done():
-                inter_arrival_times = [self.arrival_times[i] - self.arrival_times[i-1] for i in range(1, len(self.arrival_times))]
-                print('mean inter arrival time:', np.mean(inter_arrival_times))
+                for next_task in next_tasks:
+                    if next_task and next_task != 'Complete':
+                        self.waiting_cases[next_task].append(case_id)
+                    elif next_task == 'Complete':
+                        if self.reporter:
+                            self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
+            reward = time * -len(unique_active_cases)
+            self.episodic_reward += reward
             return self.observation(), reward, self.is_done(), False, None
         
     def arrivals_coming(self):
         return 1 if self.total_arrivals < self.nr_arrivals else 0
 
     def action_mask(self):
-        # (r1, a) is only possible if there is a task waiting and r1 is available
-        # (r2, a) is only possible if there is a task waiting and r2 is available
-        # postpone is only possible if there is something to postpone, i.e. there is a task waiting and a resource is available
-        # do nothing is only possible if nothing can be done, i.e. there is no task waiting or no resource is available
-        if len(self.task_types) == 1:
+        # single activity
+        if len(self.task_types) == 1: 
             r1_available = len(self.processing_r1) == 0
             r2_available = len(self.processing_r2) == 0
             a_waiting = len(self.waiting_cases['a']) > 0
-            a1_possible = a_waiting and len(self.processing_r1) == 0 and 'r1' in self.resource_pools['a']
-            a2_possible = a_waiting and len(self.processing_r2) == 0 and 'r2' in self.resource_pools['a']
-            postpone_possible = self.arrivals_coming() > 0 or (not r1_available and not r2_available)
-            do_nothing_possible = not (a1_possible or a2_possible or postpone_possible)
-            return [a1_possible, a2_possible, postpone_possible, do_nothing_possible]
-        else:
+            r1a_possible = a_waiting and r1_available and 'r1' in self.resource_pools['a']
+            r2a_possible = a_waiting and r2_available and 'r2' in self.resource_pools['a']
+            if self.arrivals_coming():
+                # If all assignments are possible, postpone is not allowed
+                postpone_possible = 1 <= sum([r1a_possible, r2a_possible]) < 2 
+            else:
+                # If both resources are available and no more cases are arriving, postpone is not allowed
+                postpone_possible = r1_available != r2_available and a_waiting
+            do_nothing_possible = sum([r1a_possible, r2a_possible, postpone_possible]) == 0
+            return [r1a_possible, r2a_possible, postpone_possible, do_nothing_possible]
+        else: # Other scenarios
             r1_available = len(self.processing_r1) == 0
             r2_available = len(self.processing_r2) == 0
             a_waiting = len(self.waiting_cases['a']) > 0
@@ -237,28 +280,26 @@ class SMDP:
             r2a_possible = a_waiting and r2_available and 'r2' in self.resource_pools['a']
             r2b_possible = b_waiting and r2_available and 'r2' in self.resource_pools['b']
 
-            # postpone is allowed if:
-            # - there are arrivals and one resource is occupied
-            # - there are arrivals and there is a queue at only one of the tasks
-            # postpone is not allowed if:
-            # - no assignments are possible
-            # - there are no arrivals and both resources are available
-            # - all assignments are possible
             if self.arrivals_coming():
-                # (one resource, one task), (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = 1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4
+                if self.config_type not in ['parallel', 'n_system']:
+                    # If there are cases waiting at activity A and both resources are avaible, postpone is not allowed
+                    postpone_possible = (not ((r1a_possible and r2a_possible) and not b_waiting) and # If there are no cases at B, postpone is not allowed
+                                        1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) < 4)
+                else:
+                    # If all actions are possible, postpone is not allowed
+                    postpone_possible = 1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) < 4
             else:
-                # (one resource, one task), not (two resources, one task), (one resource, two tasks), not (two resources, two tasks)
-                postpone_possible = (1 <= sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible]) <= 4 and
-                                    not (r1_available and r2_available)) # can't postpone if both resources are available, but no arrivals 
+                # If both resources are available and no more cases are arriving, postpone is not allowed
+                # If both resources are not available, postpone is not allowed. Instead do nothing is allowed
+                postpone_possible = (r1_available != r2_available) and (a_waiting or b_waiting)
 
             do_nothing_possible = sum([r1a_possible, r1b_possible, r2a_possible, r2b_possible, postpone_possible]) == 0
 
             if self.config_type != 'n_system':
                 return [r1a_possible, r1b_possible, r2a_possible, r2b_possible, postpone_possible, do_nothing_possible]
             else:
-                return [r1a_possible, r1b_possible, r2b_possible, postpone_possible, do_nothing_possible]
-    
+                return [r1b_possible, r2a_possible, r2b_possible, postpone_possible, do_nothing_possible]
+   
     def is_done(self):
         """
         The simulation is done if we have reached the maximum number of arrivals and there are no more tasks to process.
@@ -269,10 +310,16 @@ class SMDP:
 def random_policy(env):
     action_mask = env.action_mask()
     action = [0] * len(action_mask)
-    action_index = np.random.choice([i for i in range(len(action_mask)) if action_mask[i]])
-    action[action_index] = 1
-    #print('policy:', action_mask, action_index, action)
-    return action
+    choices = [i for i in range(len(action_mask)) if action_mask[i] and env.action_space[i] not in ['postpone', 'do_nothing']]
+    if len(choices) == 0:
+        possible_action = 'postpone' if action_mask[env.action_space.index('postpone')] else 'do_nothing'
+        action_index = env.action_space.index(possible_action)
+        action[action_index] = 1
+        return action
+    else:
+        action_index = np.random.choice(choices)
+        action[action_index] = 1
+        return action
 
 def greedy_policy(env):
     action_mask = env.action_mask()
@@ -322,7 +369,10 @@ def fifo_policy(env):
 
     # Identify the case that has been in the system the longest
     longest_waiting_case_a = min(env.waiting_cases['a']) if len(env.waiting_cases['a']) > 0 else None
-    longest_waiting_case_b = min(env.waiting_cases['b']) if len(env.waiting_cases['b']) > 0 else None
+    if 'b' in env.waiting_cases:
+        longest_waiting_case_b = min(env.waiting_cases['b']) if len(env.waiting_cases['b']) > 0 else None
+    else:
+        longest_waiting_case_b = None
     #print('longest_case', longest_waiting_case_a, longest_waiting_case_b)
     if longest_waiting_case_a is not None and longest_waiting_case_b is not None:
         longest_waiting_case_type = 'a' if longest_waiting_case_a < longest_waiting_case_b else 'b'
@@ -362,7 +412,7 @@ def epsilon_greedy_policy(env):
     else:
         return greedy_policy(env)
 
-def threshold_policy(env, observation=None, action_mask=None, threshold=5):
+def threshold_policy(env, observation=None, action_mask=None, threshold=2):
     if action_mask is None and observation is None:  # this is mainly for testing purposes
         observation = env.observation()
         action_mask = env.action_mask()
@@ -376,13 +426,13 @@ def threshold_policy(env, observation=None, action_mask=None, threshold=5):
 
 
 if __name__ == '__main__':
-    nr_replications = 1
+    nr_replications = 100
     avg_cycle_times = []
     total_rewards = []
     for _ in range(nr_replications):
-        reporter = EventLogReporter("smdp_log.txt")
-        #reporter = ProcessReporter()
-        env = SMDP(100000, 'slow_server', reporter)
+        #reporter = EventLogReporter("smdp_log.txt")
+        reporter = ProcessReporter()
+        env = SMDP(3000, 'parallel', reporter)
 
         done = False
         steps = 0

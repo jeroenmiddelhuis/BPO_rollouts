@@ -2,3 +2,6 @@
 /models
 test.csv
 settings.json
+/results
+/.vscode
+/data

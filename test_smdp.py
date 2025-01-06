@@ -6,7 +6,7 @@ class SMDPTests(unittest.TestCase):
 
     def test_smdp_observation(self):
         env = smdp.SMDP(2, 'slow_server')
-        self.assertEqual(env.observation(), [1, 1, 0, 0, 0, 0])
+        self.assertEqual(env.observation(), [1, 1, 0, 0, 0, 0, 0, 0])
 
     def test_smdp_action_mask_initial_state(self):
         env = smdp.SMDP(2, 'slow_server')
@@ -181,15 +181,15 @@ class SMDPTests(unittest.TestCase):
     def test_slow_server(self):
         env = smdp.SMDP(1, 'slow_server')
         observation = env.observation()
-        self.assertEqual(observation, [1, 1, 0, 0, 0, 0])
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0, 0, 0])
         # initially nothing is possible and we are waiting for an arrival
         self.assertEqual(env.action_mask(), [False, False, False, False, False, True])
         observation, reward, done, _, _ = env.step((0, 0, 0, 0, 0, 1))
-        self.assertEqual(observation, [1, 1, 0, 0, 1, 0])
-        # now activity a is possible, postpone and do nothing are not possible
-        self.assertEqual(env.action_mask(), [True, False, True, False, False, False])
+        self.assertEqual(observation, [1, 1, 0, 0, 0, 0, 1, 0])
+        # now activity a is possible, postpone is possible but do nothing is not possible
+        self.assertEqual(env.action_mask(), [True, False, True, False, True, False])
         observation, reward, done, _, _ = env.step((1, 0, 0, 0, 0, 0))
-        self.assertEqual(observation, [1, 1, 0, 0, 0, 1])
+        self.assertTrue(observation == [1, 1, 0, 0, 0, 0, 0, 1] or observation == [1, 1, 1, 0, 0, 0, 1, 0])
         # now activity b is possible, postpone and do nothing are not possible
         self.assertEqual(env.action_mask(), [False, True, False, True, False, False])
         observation, reward, done, _, _ = env.step((0, 1, 0, 0, 0, 0))
