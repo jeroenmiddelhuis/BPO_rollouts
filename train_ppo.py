@@ -29,10 +29,11 @@ lr = 3e-05
 
 n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
-config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
-#sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+#config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
 env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
-test_mode = sys.argv[3] if len(sys.argv) > 3 else True
+test_mode = sys.argv[3] if len(sys.argv) > 3 else False
+reward_function = sys.argv[4] if len(sys.argv) > 4 else 'case_cycle_time'
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -61,7 +62,7 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
 if __name__ == '__main__':
     if test_mode == False:
         # Create log dir
-        log_dir = f"./models/ppo/{env_type}/{config_type}/" # Logging training results
+        log_dir = f"./models/ppo/{env_type}/{reward_function}/{config_type}/" # Logging training results
         os.makedirs(log_dir, exist_ok=True)
 
         average_step_time_smdp = {
@@ -76,7 +77,7 @@ if __name__ == '__main__':
         tau = average_step_time_smdp[config_type] / 2
 
         if env_type == 'mdp':
-            env = mdp.MDP(2500, config_type, tau)
+            env = mdp.MDP(2500, config_type, tau, reward_function=reward_function)
         elif env_type == 'smdp':
             env = smdp.SMDP(2500, config_type)
 

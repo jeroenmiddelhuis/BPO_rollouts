@@ -218,11 +218,11 @@ class ValueIteration:
 
 
     def value_iteration(self, max_iterations=0):
-        assert self.gamma == 1 and not max_iterations == 0, "Set max_iterations > 0 when using gamma = 1"
-        obs1 = [1, 1, 0, 0, 0, 0, 10, 20]
+        if self.gamma == 1:
+            assert max_iterations != 0, "Set max_iterations > 0 when using gamma = 1"
         # All states, so we can use the state_to_index function
-        q = np.full((len(self.all_states), len(self.env.action_space)), -999999999.9)
-        v = np.full(len(self.all_states), -999999999.9)
+        q = np.full((len(self.all_states), len(self.env.action_space)), 0.0)
+        v = np.full(len(self.all_states), 0.0)
         policy = np.full(len(self.all_states), -1) 
 
         iteration = 1
@@ -281,17 +281,19 @@ class ValueIteration:
                         for next_observation, probability, reward in evolutions:
                             sum += probability * (reward + self.gamma * v[self.observation_to_index(next_observation)])
                         q[self.observation_to_index(s), i] = sum
-                        
+ 
+                
                 old_value = v[self.observation_to_index(s)]
-                new_value = max(q[self.observation_to_index(s)])
+                new_value = max([q[self.observation_to_index(s), i] for i, mask in enumerate(action_mask) if mask == 1])
                 delta = max(delta, abs(new_value - old_value))
 
-                # v[self.observation_to_index(s)] = max(q[self.observation_to_index(s)])
-                # policy[self.observation_to_index(s)] = np.argmax(q[self.observation_to_index(s)])
-            
-                valid_q_values = [q[self.observation_to_index(s), i] for i, mask in enumerate(action_mask) if mask == 1]
-                v[self.observation_to_index(s)] = max(valid_q_values)
+                v[self.observation_to_index(s)] = new_value
                 policy[self.observation_to_index(s)] = np.argmax([q[self.observation_to_index(s), i] if mask == 1 else -np.inf for i, mask in enumerate(action_mask)])
+                
+                obs1 = [1, 1, 10]
+                if s == obs1:
+                    print(q[self.observation_to_index(obs1)])
+                    print(policy[self.observation_to_index(obs1)])
 
             iteration += 1
             if max_iterations != 0:
@@ -313,15 +315,14 @@ def main():
     'down_stream': 0.6681612256898539,
     'single_activity': 1.0042253394472318
     }
-    config = 'slow_server'
-    for config in ['slow_server']:
+    for config in ['single_activity']:
         tau = average_step_time_smdp[config] / 2
         env = mdp.MDP(3000, config, tau)
 
         gamma = 1
         theta = 0.001
         vi = ValueIteration(env, gamma=gamma,theta=theta)
-        q, v, policy = vi.value_iteration(100)
+        q, v, policy = vi.value_iteration(3000)
         directory = 'models/vi'
         if not os.path.exists(directory):
             os.makedirs(directory)

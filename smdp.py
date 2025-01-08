@@ -5,7 +5,7 @@ import random
 
 class SMDP:
 
-    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None):
+    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None, reward_function='AUC'):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -19,6 +19,7 @@ class SMDP:
         """
         # Read the config file and set the process parameters
         self.config_type = config_type
+        self.reward_function = reward_function
         self.env_type = 'smdp'
 
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt"), "r") as f:
@@ -61,6 +62,8 @@ class SMDP:
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
         self.episodic_reward = 0
+        self.arrival_times = {}
+        self.cycle_times = {}
 
         self.actions_taken = {}
         self.reporter = reporter
@@ -92,6 +95,8 @@ class SMDP:
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
         self.actions_taken = {}
+        self.arrival_times = {}
+        self.cycle_times = {}
         #print(self.episodic_reward)
         self.episodic_reward = 0
     
@@ -179,6 +184,8 @@ class SMDP:
         return evolutions, evolution_rates
 
     def step(self, action):
+        reward = 0 
+
         action_index = action.index(1)
         action = self.action_space[action_index]
         if action not in self.actions_taken:
@@ -227,6 +234,8 @@ class SMDP:
             evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival':
+                self.arrival_times[self.total_arrivals] = self.total_time
+                # sample the first task from the transition matrix
                 next_tasks = self.sample_next_task('Start')
                 for task in next_tasks:
                     self.waiting_cases[task].append(self.total_arrivals)
@@ -244,9 +253,13 @@ class SMDP:
                     if next_task and next_task != 'Complete':
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
+                        self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
+                        if self.reward_function == 'case_cycle_time':
+                            reward += -self.cycle_times[case_id]
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
-            reward = time * -len(unique_active_cases)
+            if self.reward_function == 'AUC':
+                reward += time * -len(unique_active_cases)
             self.episodic_reward += reward
             return self.observation(), reward, self.is_done(), False, None
         

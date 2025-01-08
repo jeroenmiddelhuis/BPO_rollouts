@@ -34,6 +34,7 @@ class Environment(Env):
         #     print("Number of actions:", sum(self.selected_actions.values()))
         #     print("Average reward per action:", self.episode_reward / sum(self.selected_actions.values()))
         # print(self.env.episodic_reward, self.env.nr_arrivals)
+        print(self.episode_reward, self.env.episodic_reward)
         self.env.reset()
         
         self.episode_reward = 0

@@ -6,7 +6,7 @@ import random
 PRINT_TRAJECTORY = False
 
 class MDP:
-    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None):
+    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None, reward_function='AUC'):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -20,6 +20,7 @@ class MDP:
         """
         # Read the config file and set the process parameters
         self.config_type = config_type
+        self.reward_function = reward_function
         self.env_type = 'mdp'
 
         with open(os.path.join(sys.path[0], "config.txt"), "r") as f:
@@ -65,7 +66,8 @@ class MDP:
         self.original_nr_arrivals = nr_arrivals
         self.tau = tau
         self.locked_action = None
-
+        self.arrival_times = {}
+        self.cycle_times = {}
         self.actions_taken = {}
         self.actual_actions_taken = {}
         self.episodic_reward = 0
@@ -98,6 +100,8 @@ class MDP:
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
         self.locked_action = None
+        self.arrival_times = {}
+        self.cycle_times = {}
         #print(self.episodic_reward)
         self.episodic_reward = 0
     
@@ -200,6 +204,7 @@ class MDP:
 
     def step(self, action):
         original_action = action
+        reward = 0
 
         action_index = action.index(1)
         action = self.action_space[action_index]
@@ -209,27 +214,21 @@ class MDP:
         self.actions_taken[action] += 1
         transformed_evolutions, evolution_rates = self.get_transformed_evolutions(self.processing_r1, self.processing_r2, self.arrivals_coming(), action)
         
-        # expected_event_time = 1 / sum(evolution_rates.values())
+        if self.reward_function == 'AUC':
+            if len(self.processing_r1) > 0:
+                processing_r1_case = [self.processing_r1[0][0]]
+            else:
+                processing_r1_case = []
+            if len(self.processing_r2) > 0:
+                processing_r2_case = [self.processing_r2[0][0]]
+            else:
+                processing_r2_case = []
+            if self.config_type != 'single_activity':
+                unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a'] + self.waiting_cases['b']))
+            else:
+                unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a']))
 
-        if len(self.processing_r1) > 0:
-            processing_r1_case = [self.processing_r1[0][0]]
-        else:
-            processing_r1_case = []
-        if len(self.processing_r2) > 0:
-            processing_r2_case = [self.processing_r2[0][0]]
-        else:
-            processing_r2_case = []
-        if self.config_type != 'single_activity':
-            unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a'] + self.waiting_cases['b']))
-        else:
-            unique_active_cases = list(set(processing_r1_case + processing_r2_case + self.waiting_cases['a']))
-
-        # expected_reward = -expected_event_time * len(unique_active_cases)
-        # reward_rate = expected_reward / expected_event_time
-        
-        # reward_rate = expected_reward / expected_event_time = -expected_event_time * len(unique_active_cases) / expected_event_time = -len(unique_active_cases)
-        # reward = reward_rate * self.tau = -len(unique_active_cases) * self.tau
-        reward = -len(unique_active_cases) * self.tau # Not needed to multiply by constant tau but kept for consistency with SMDP
+            reward += -len(unique_active_cases) * self.tau # Not needed to multiply by constant tau but kept for consistency with SMDP
 
         events, probs = zip(*list(transformed_evolutions.items()))
         evolution = np.random.choice(events, p=probs)
@@ -258,6 +257,7 @@ class MDP:
             # an arrival, r1 processing the task or r2 processing the task
             # the probability of one of these evolutions happening is proportional to the rate of that evolution.
             if evolution == 'arrival':
+                self.arrival_times[self.total_arrivals] = self.total_time
                 # sample the first task from the transition matrix
                 next_tasks = self.sample_next_task('Start')
                 for task in next_tasks:
@@ -276,6 +276,9 @@ class MDP:
                     if next_task and next_task != 'Complete':
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
+                        self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
+                        if self.reward_function == 'case_cycle_time':
+                            reward += -self.cycle_times[case_id]
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
             self.episodic_reward += reward
