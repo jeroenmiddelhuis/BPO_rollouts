@@ -30,10 +30,10 @@ lr = 3e-05
 n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
-config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
-env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
 test_mode = sys.argv[3] if len(sys.argv) > 3 else False
-reward_function = sys.argv[4] if len(sys.argv) > 4 else 'case_cycle_time'
+reward_function = sys.argv[4] if len(sys.argv) > 4 else 'inverse_case_cycle_time'
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -60,9 +60,9 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
     print(average_reward, std_reward)  
 
 if __name__ == '__main__':
-    if test_mode == False:
+    if test_mode == False or test_mode == "False":
         # Create log dir
-        log_dir = f"./models/ppo/{env_type}/{reward_function}/{config_type}/" # Logging training results
+        log_dir = f"./models/ppo_test/{env_type}/{config_type}/{reward_function}/" # Logging training results
         os.makedirs(log_dir, exist_ok=True)
 
         average_step_time_smdp = {
@@ -79,9 +79,9 @@ if __name__ == '__main__':
         if env_type == 'mdp':
             env = mdp.MDP(2500, config_type, tau, reward_function=reward_function)
         elif env_type == 'smdp':
-            env = smdp.SMDP(2500, config_type)
+            env = smdp.SMDP(2500, config_type, reward_function=reward_function)
 
-        print(f'Training agent for {config_type} with {time_steps} timesteps in updates of {n_steps} steps.')
+        print(f'Training agent for {config_type} with {time_steps} timesteps and reward function {reward_function} in updates of {n_steps} steps.')
         
         # Training environment
         # Create and wrap the environment
@@ -114,7 +114,6 @@ if __name__ == '__main__':
         eval_callback = EvalPolicyCallback(check_freq=10*int(n_steps), nr_evaluations=10, log_dir=log_dir, eval_env=gym_env_eval)
         best_reward_callback = SaveOnBestTrainingRewardCallback(check_freq=int(n_steps), log_dir=log_dir)
 
-
         model.learn(total_timesteps=int(time_steps), callback=eval_callback)#
 
         # For episode rewards, use env.get_episode_rewards()®
@@ -133,13 +132,12 @@ if __name__ == '__main__':
         """
         Evaluation of the learned policies
         """
-        for config_type in config_type:
-                for env_type in [env_type]:
-                    print(config_type, env_type)
 
-                    filename = f"./models/ppo//{env_type}/{config_type}/best_model.zip"
-                    results_dir = f"./results/ppo_{config_type}_{env_type}.txt"
-            
-                    evaluate_policy(filename, config_type, episode_length=2500, nr_rollouts=300, 
-                                    results_dir=results_dir, env_type=env_type)
-                    print('\n')        
+        print(config_type, env_type)
+
+        filename = f"./models/ppo//{env_type}/{config_type}/{reward_function}/best_model.zip"
+        results_dir = f"./results/ppo_{env_type}_{reward_function}_{config_type}.txt"
+
+        evaluate_policy(filename, config_type, episode_length=2500, nr_rollouts=300, 
+                        results_dir=results_dir, env_type=env_type)
+        print('\n')        

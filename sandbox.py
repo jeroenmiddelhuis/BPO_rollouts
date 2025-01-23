@@ -8,49 +8,44 @@ from tqdm import tqdm
 import os
 import pickle
 
-env = smdp.SMDP(2500, config_type='slow_server')
-greedy_policy = smdp.greedy_policy
+if __name__ == '__main__':
 
-states = rollouts.random_states(env, smdp.random_policy, nr_states=5000) # we use the random policy to sample the start states. SMDP and MDP random policy is the same.
+    average_step_time_smdp = {
+        'slow_server': 0.6700290812922858,
+        'low_utilization': 0.6667579762550317,
+        'high_utilization': 0.6695359811479276,
+        'n_system': 1.0013236383088864,
+        'parallel': 0.6680392125284501,
+        'down_stream': 0.6681612256898539,
+        'single_activity': 1.0042253394472318
+    }
 
-learning_samples_X = []
-learning_samples_y = []
-for i in tqdm(range(len(states))):
-    state = states[i]
-    env.set_state(state)
-    learning_sample = rollouts.find_learning_sample(env, greedy_policy, nr_rollouts_per_action=100, nr_steps_per_rollout=50, only_statistically_significant=False)
-    if learning_sample is not None:
-        learning_samples_X.append(learning_sample[0])
-        learning_samples_y.append(learning_sample[1])
+    config_type = 'slow_server'
+    nr_steps_per_rollout = 50
+    tau = average_step_time_smdp[config_type] * 0.5
+    mdp_steps = int(nr_steps_per_rollout * average_step_time_smdp[config_type] / tau)
+
+    env = mdp.MDP(2500, config_type='slow_server', tau=tau)
+    greedy_policy = smdp.greedy_policy
+
+    learning_samples_X, learning_samples_y = rollouts.learn_iteration(env, 
+                                                                      greedy_policy, 
+                                                                      nr_states_to_explore=5000, 
+                                                                      nr_rollouts_per_action_per_state=100,
+                                                                      nr_steps_per_rollout=mdp_steps, 
+                                                                      only_statistically_significant=True,
+                                                                      return_learning_samples=True)
+
+    # Create data directory if it doesn't exist
+    os.makedirs('data', exist_ok=True)
+
+    # Save learning samples
+    with open('data/mdp_learning_samples.pkl', 'wb') as f:
+        pickle.dump({
+            'X': learning_samples_X,
+            'y': learning_samples_y
+        }, f)
 
 
-# Create data directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
 
-# Save learning samples
-with open('data/mdp_learning_samples.pkl', 'wb') as f:
-    pickle.dump({
-        'X': learning_samples_X,
-        'y': learning_samples_y
-    }, f)
-
-# env.set_state([{'a':[1], 'b':[2]}, [(2, 'b')], [(3, 'a')], 0, 2, 10])
-
-# self.waiting_cases = state[0].copy()
-# self.processing_r1 = state[1].copy()
-# self.processing_r2 = state[2].copy()
-# self.total_time = state[3]
-# self.total_arrivals = state[4]
-# self.nr_arrivals = state[5]
-
-# print(env.observation())
-# #print([env.sample_next_task('Start') for _ in range(50)])
-# print(env.action_space)
-# env.step([0,0,0,0,1])  # now a case must have arrived consequently r1, r2, and postpone are all possible
-# observation, possible_actions, rewards = rollouts.multiple_rollouts_per_action(env, mdp.greedy_policy, 5)
-# print(observation)
-# print(possible_actions)
-# if rewards is not None:
-#     for action in rewards:
-#         print(round(sum(rewards[action])))
 

@@ -176,7 +176,7 @@ class ValueIterationPolicy():
 
         self.feature_ranges = []
         for state_label in self.env.state_space:
-            if 'is_processing_' in state_label:
+            if 'is_available_' in state_label:
                 self.feature_ranges.append(2)
             elif 'assigned_' in state_label:
                 self.feature_ranges.append(2)

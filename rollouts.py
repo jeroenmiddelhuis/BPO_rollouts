@@ -163,7 +163,8 @@ def learn_iteration(env,
                     nr_steps_per_rollout=np.inf,  
                     learner=None, 
                     model_type='neural_network',
-                    only_statistically_significant=False):
+                    only_statistically_significant=False,
+                    return_learning_samples=False):
     """
     Does one iteration of learning. In the following steps:
     1. Samples start states.
@@ -192,6 +193,8 @@ def learn_iteration(env,
         if result is not None:
             learning_samples_X.append(result[0])
             learning_samples_y.append(result[1])
+    if return_learning_samples:
+        return learning_samples_X, learning_samples_y
     
     print("Number of learning samples found:", len(learning_samples_X), "out of", len(states), "states.")
     if only_statistically_significant:
@@ -221,7 +224,7 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, ppo=False):
             nr_arrivals = env.nr_arrivals
             
         with Pool() as pool:
-            total_rewards = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=True))
+            total_rewards = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=False))
         return total_rewards
 
 
