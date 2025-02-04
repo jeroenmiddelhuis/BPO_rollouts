@@ -88,6 +88,11 @@ if __name__ == '__main__':
         gym_env = Environment(env)  # Initialize env
         gym_env = Monitor(gym_env, log_dir)
 
+        if reward_function == 'inverse_case_cycle_time':
+            gamma = 0.999
+        else:
+            gamma = 1
+            
         # Create the model
         model = MaskablePPO(CustomPolicy, 
                             gym_env, 
@@ -95,7 +100,7 @@ if __name__ == '__main__':
                             learning_rate=linear_schedule(lr), 
                             n_steps=int(n_steps), 
                             batch_size=batch_size, 
-                            gamma=1, 
+                            gamma=gamma, 
                             verbose=1) #
 
         #Logging to tensorboard. To access tensorboard, open a bash terminal in the projects directory, activate the environment (where tensorflow should be installed) and run the command in the following line

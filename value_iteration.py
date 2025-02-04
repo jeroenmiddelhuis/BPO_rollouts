@@ -1,11 +1,11 @@
-import mdp
+import mdp, mdp_composite
 import numpy as np
 import itertools
 from tqdm import tqdm
 import os
 
 class ValueIteration:
-    def __init__(self, env, gamma=0.9, theta=0.0001):
+    def __init__(self, env, gamma=1, theta=0.0001):
         self.env = env
         self.tau = env.tau
         self.config_type = self.env.config_type
@@ -27,7 +27,9 @@ class ValueIteration:
                 feature_ranges.append(2)
             elif 'waiting_' in state_label:
                 feature_ranges.append(self.max_queue + 1)
+        print(feature_ranges)
         all_states = [list(state) for state in itertools.product(*[range(i) for i in feature_ranges])]
+        print('all states', len(all_states))
         state_space = []
         for observation in all_states:
             try:
@@ -54,19 +56,13 @@ class ValueIteration:
         return observation, penalty
     
     def check_feasible_observation(self, observation):
-        if self.config_type == 'single_activity':
-            assert len(observation) == 3
-        elif self.config_type == 'n_system':
-            assert len(observation) == 6
-        else:
-            assert len(observation) == 8
+        assert len(observation) == len(self.env.state_space), f"Observation ({len(observation)}) and state space ({len(self.env.state_space)}) length must match"
 
-        # The sum of all labels related to r1 and r2 should be 1
-        # TODO SUM OF OBSERVATIONS FOR N_SYSTEM AND SINGLE_ACTIVITY
-        if self.config_type not in ['n_system', 'single_activity']:
-            assert sum([1 for i, x in enumerate(observation) if x == 1 and 'r1' in self.env.state_space[i]]) == 1
-        if self.config_type != 'single_activity':
-            assert sum([1 for i, x in enumerate(observation) if x == 1 and 'r2' in self.env.state_space[i]]) == 1
+        for resource in self.env.resources:
+            # Some features do not contain assigned_ features if they can only be assigned to one task
+            for state in self.env.state_space:
+                if f'assigned_{resource}' in state:
+                    assert sum([1 for i, x in enumerate(observation) if x == 1 and resource in self.env.state_space[i]]) == 1
 
         # All values should be positive
         assert all([x >= 0 for x in observation])
@@ -79,8 +75,7 @@ class ValueIteration:
     def set_state_from_observation(self, env, observation):
         state_space_labels = env.state_space
         waiting_cases = {task_type: [] for task_type in env.task_types}
-        processing_r1 = []
-        processing_r2 = []
+        processing_resources = []
         total_time = 0 # Not relevant for state transitions
         total_arrivals = 0 # Not relevant for state transitions
         nr_arrivals = 1000 # Not relevant for state transitions, but should be different than total_arrivals
@@ -88,45 +83,36 @@ class ValueIteration:
         # Set waiting cases
         for task_type in self.env.task_types:
             nr_cases = observation[state_space_labels.index(f'waiting_{task_type}')]
-            waiting_cases[task_type] = [i for i in range(nr_cases)]
+            already_waiting_cases = sum([len(waiting_cases[task_type]) for task_type in self.env.task_types])
+            waiting_cases[task_type] = [i + already_waiting_cases for i in range(nr_cases)]
 
-        for state_space_label in state_space_labels:
-            # Single activity case, so we don't have assigned_ features
-            if self.config_type == 'single_activity' and state_space_label.startswith('is_available'):
-                resource = state_space_label.split('_')[-1]
-                if observation[state_space_labels.index(state_space_label)] == 0: # == 0 which means the resource is assigned
-                    if resource == 'r1':
-                        processing_r1 = [(len(waiting_cases[task_type]), task_type)]
-                    if resource == 'r2':
-                        processing_r2 = [(len(waiting_cases[task_type]) + len(processing_r1), task_type)]
-
-            if self.config_type == 'n_system' and state_space_label == 'is_available_r1':
-                # In n_system, r2 can process both activities, but r1 can only process B
-                # Therefore, we don't have the assigned_ features for r1
-                if observation[state_space_labels.index('is_available_r1')] == 0: # == 0 which means the resource is assigned
-                    processing_r1 = [(len(waiting_cases[task_type]), 'b')]
-
-            if state_space_label.startswith('assigned_'):
-                # Generate processing_r1, r2 from the assigned_ features for remaining scenarios
-                if observation[state_space_labels.index(state_space_label)] == 1:
-                    assignment = state_space_label.split('_')[1]
-                    resource, task_type = assignment[0:2], assignment[2]
-                    if resource == 'r1':
-                        processing_r1 = [(len(waiting_cases[task_type]), task_type)]
-                    elif resource == 'r2':
-                        if self.config_type != 'parallel':
-                            processing_r2 = [(len(waiting_cases[task_type]) + len(processing_r1), task_type)]
-                        else:
-                            is_processing_r1_same_case = 1 if len(processing_r1) > 0 and processing_r1[0][1] == task_type else 0                                
-                            processing_r2 = [(len(waiting_cases[task_type]) + is_processing_r1_same_case, task_type)]
-
-        env.set_state((waiting_cases, processing_r1, processing_r2, total_time, total_arrivals, nr_arrivals, None))
+        # Set processing resources
+        for resource in self.env.resources:
+            # The resource is available
+            if observation[state_space_labels.index(f'is_available_{resource}')] == 1: # The resource is available
+                processing_resources.append([])
+            # The resource is busy and there is an assigned resource variable. Check which task is assigned
+            elif any(label.startswith(f'assigned_{resource}') for label in state_space_labels):
+                for task_type in self.env.task_types:
+                    if f'assigned_{resource}{task_type}' in state_space_labels and observation[state_space_labels.index(f'assigned_{resource}{task_type}')] == 1:
+                        processing_resources.append([(sum([len(waiting_cases[task_type]) for task_type in self.env.task_types]) 
+                                                      + sum([len(processing_resource) for processing_resource in processing_resources]), 
+                                                      task_type)])
+            else: # No assigned resource variable, so we need to check which task is assigned
+                for task_type in self.env.task_types:
+                    resource_pool = self.env.resource_pools[task_type]
+                    # Check if the resource is in the resource pool and if it is the only resource processing the task
+                    if resource in resource_pool and sum([resource not in self.env.resource_pools[task_type2] for task_type2 in self.env.task_types if task_type2 != task_type]) == 0:
+                        processing_resources.append([(sum([len(waiting_cases[task_type]) for task_type in self.env.task_types]) 
+                                                      + sum([len(processing_resource) for processing_resource in processing_resources]), 
+                                                      task_type)])
+        env.set_state((waiting_cases, processing_resources, total_time, total_arrivals, nr_arrivals, None))
 
     def observation(self):
         return self.env.observation()
     
-    def get_transformed_evolutions(self, processing_r1, processing_r2, arrivals_coming=True, action=None):
-        return self.env.get_transformed_evolutions(processing_r1, processing_r2, arrivals_coming, action)
+    def get_transformed_evolutions(self, processing_resources, arrivals_coming=True, action=None):
+        return self.env.get_transformed_evolutions(processing_resources, arrivals_coming, action)
 
     def observation_to_index(self, observation):
         """
@@ -146,27 +132,16 @@ class ValueIteration:
                 multiplier *= self.feature_ranges[i]        
         return index
 
-    def process_observation(self, observation, action):
-        if action == 'r1a':
-            observation[self.env.state_space.index('is_available_r1')] = 0
-            if self.config_type not in ['n_system', 'single_activity']:
-                observation[self.env.state_space.index('assigned_r1a')] = 1
-            observation[self.env.state_space.index('waiting_a')] -= 1
-        elif action == 'r1b':
-            observation[self.env.state_space.index('is_available_r1')] = 0
-            if self.config_type not in ['n_system', 'single_activity']: 
-                observation[self.env.state_space.index('assigned_r1b')] = 1
-            observation[self.env.state_space.index('waiting_b')] -= 1
-        elif action == 'r2a':
-            observation[self.env.state_space.index('is_available_r2')] = 0
-            if self.config_type != 'single_activity':
-                observation[self.env.state_space.index('assigned_r2a')] = 1
-            observation[self.env.state_space.index('waiting_a')] -= 1
-        elif action == 'r2b':
-            observation[self.env.state_space.index('is_available_r2')] = 0
-            if self.config_type != 'single_activity':
-                observation[self.env.state_space.index('assigned_r2b')] = 1
-            observation[self.env.state_space.index('waiting_b')] -= 1
+    def process_observation(self, observation, actions):
+        if actions not in ['postpone', 'do_nothing']:
+            if isinstance(actions, str):
+                actions = [actions]
+            for action in actions:
+                resource, task = action[:-1], action[-1]
+                observation[self.env.state_space.index(f'is_available_{resource}')] = 0
+                if f'assigned_{resource}{task}' in self.env.state_space:
+                    observation[self.env.state_space.index(f'assigned_{resource}{task}')] = 1
+                observation[self.env.state_space.index(f'waiting_{task}')] -= 1
         return observation
 
     def evolve_observation(self, observation, evolution):
@@ -174,51 +149,40 @@ class ValueIteration:
         if evolution == 'return_to_state':
             return observation
         elif evolution == 'arrival':
-            if self.config_type == 'single_activity':
-                observation[-1] += 1
-                return observation
-            elif self.config_type == 'n_system':
-                observation1 = observation.copy()
-                observation2 = observation.copy()
-                observation1[-1] += 1 # 50% chance that an arrival will happen at either activity
-                observation2[-2] += 1
-                return (observation1, observation2)
-            elif self.config_type == 'parallel':
-                # Arrival at both activities
-                observation[-1] += 1
-                observation[-2] += 1
-                return observation
-            else:
-                # Arrival at activity a
-                observation[-2] += 1
-                return observation
-        elif evolution == 'r1a':         
-            observation[self.env.state_space.index('is_available_r1')] = 1 # Resource becomes available
-            if self.config_type not in ['n_system', 'single_activity']:
-                observation[self.env.state_space.index('assigned_r1a')  ] = 0 # Assignment is removed
-            next_task = 'b' if self.config_type not in ['n_system', 'parallel', 'single_activity'] else None
-            if next_task is not None:
-                observation[self.env.state_space.index(f'waiting_{next_task}')] += 1 # New task is generated
-            return observation
-        elif evolution == 'r1b':
-            observation[self.env.state_space.index('is_available_r1')] = 1
-            if self.config_type not in ['n_system', 'single_activity']:
-                observation[self.env.state_space.index('assigned_r1b')] = 0
-            return observation
-        elif evolution == 'r2a':
-            observation[self.env.state_space.index('is_available_r2')] = 1 # Resource becomes available
-            if self.config_type != 'single_activity':
-                observation[self.env.state_space.index('assigned_r2a')  ] = 0 # Assignment is removed
-            next_task = 'b' if self.config_type not in ['n_system', 'parallel', 'single_activity'] else None
-            if next_task is not None:
-                observation[self.env.state_space.index(f'waiting_{next_task}')] += 1 # New task is generated
-            return observation
-        elif evolution == 'r2b':
-            observation[self.env.state_space.index('is_available_r2')] = 1
-            if self.config_type != 'single_activity':
-                observation[self.env.state_space.index('assigned_r2b')] = 0
-            return observation
-
+            next_states = []
+            transition_matrix = self.env.transitions['Start']
+            next_observation = observation.copy()
+            for i, probability in enumerate(transition_matrix[:-1]): # Excluding 'Complete' event
+                if probability > 0:                    
+                    next_task = self.env.task_types_all[i]
+                    next_observation[self.env.state_space.index(f'waiting_{next_task}')] += 1
+                    if sum(transition_matrix) <= 1: # If there are no parallel tasks, add the state to the next_states
+                        next_states.append((next_observation, probability))
+                        next_observation = observation.copy()
+            if len(next_states) == 0: # Append parallel tasks
+                next_states.append((next_observation, 1))
+            return next_states
+        else:
+            resource, task = evolution[:-1], evolution[-1]
+            # Process the completion of the assignment
+            observation[self.env.state_space.index(f'is_available_{resource}')] = 1
+            if f'assigned_{resource}{task}' in self.env.state_space:
+                observation[self.env.state_space.index(f'assigned_{resource}{task}')] = 0
+            
+            # Generate new task due to completion of the assignment
+            next_states = []
+            transition_matrix = self.env.transitions[task]
+            next_observation = observation.copy()
+            for i, probability in enumerate(transition_matrix[:-1]): # Excluding 'Complete' event
+                if probability > 0:                    
+                    next_task = self.env.task_types_all[i]
+                    next_observation[self.env.state_space.index(f'waiting_{next_task}')] += 1
+                    if sum(transition_matrix) <= 1: # If there are no parallel tasks, add the state to the next_states
+                        next_states.append((next_observation, probability))
+                        next_observation = observation.copy()
+            if len(next_states) == 0: # Append parallel tasks
+                next_states.append((next_observation, 1))
+            return next_states
 
     def value_iteration(self, max_iterations=0):
         # All states, so we can use the state_to_index function
@@ -231,57 +195,61 @@ class ValueIteration:
         iteration = 0
         delta = 0
         done = False
-        state = []
         while not done:
             print(f'Iteration {iteration} with delta {delta} and delta_delta {delta_delta}')
             
             delta = 0
-            for s in tqdm(self.state_space, total=len(self.state_space), disable=True):
+            for s in tqdm(self.state_space, total=len(self.state_space), disable=False):
                 self.set_state_from_observation(self.env, s)
                 action_mask = self.env.action_mask()
 
-                if self.config_type != 'parallel':
-                    if self.config_type != 'single_activity':                        
-                        nr_active_cases = len(list(self.env.processing_r2 + self.env.processing_r2 + self.env.waiting_cases['a'] + self.env.waiting_cases['b']))
-                    else:
-                        nr_active_cases = len(list(self.env.processing_r1 + self.env.processing_r2 + self.env.waiting_cases['a']))
-                else:
-                    processing_type_a = [case for case in self.env.processing_r1 if case[1] == 'a'] + [case for case in self.env.processing_r2 if case[1] == 'a']
-                    processing_type_b = [case for case in self.env.processing_r1 if case[1] == 'b'] + [case for case in self.env.processing_r2 if case[1] == 'b']
-                    nr_active_cases = max(len(list(processing_type_a + self.env.waiting_cases['a'])), len(list(processing_type_b + self.env.waiting_cases['b'])))
+                # Create set of unique active cases
+                unique_active_cases = {getattr(self.env, f'processing_r{i}')[0][0] 
+                                    for i in range(1, len(self.env.resources)+1) 
+                                    if len(getattr(self.env, f'processing_r{i}')) > 0}            
+                for task in self.env.task_types:
+                    unique_active_cases.update(self.env.waiting_cases[task])
 
+                nr_active_cases = len(unique_active_cases)
+
+                # Correct for parallel cases
+                if self.config_type == 'parallel':
+                    cases_a = len([case for case in self.env.processing_r1 if case[1] == 'a']) + len([case for case in self.env.processing_r2 if case[1] == 'a']) + len(self.env.waiting_cases['a'])
+                    cases_b = len([case for case in self.env.processing_r1 if case[1] == 'b']) + len([case for case in self.env.processing_r2 if case[1] == 'b']) + len(self.env.waiting_cases['b'])
+                    # Each cases is assigned a different id, but we correct here for cases that are in parallel
+                    # For example state [0, 1, 1, 0, 0, 0, 10, 15] has 26 active tasks, but only 15 unique cases
+                    nr_active_cases -=  min(cases_a, cases_b)
+                elif self.config_type == 'composite':
+                    cases_k = len([case for case in self.env.processing_r11 if case[1] == 'k']) + len([case for case in self.env.processing_r12 if case[1] == 'k']) + len(self.env.waiting_cases['k'])
+                    cases_l = len([case for case in self.env.processing_r11 if case[1] == 'l']) + len([case for case in self.env.processing_r12 if case[1] == 'l']) + len(self.env.waiting_cases['l'])
+                    nr_active_cases -=  min(cases_k, cases_l)
+  
                 step_reward = -nr_active_cases * self.tau
 
                 for i, mask in enumerate(action_mask):
                     if mask == 1:
-                        action = [0 for _ in range(len(action_mask))]
-                        action[i] = 1
-                        action = tuple(action)
-                        action_name = self.env.action_space[i]
+                        action = self.env.action_space[i]
 
-                        evolutions = []
+                        next_states = []
 
-                        evolution_probabilities, _ = self.get_transformed_evolutions(self.env.processing_r1, self.env.processing_r2, arrivals_coming=True, action=action_name)
+                        processing_resources = [getattr(self.env, f'processing_r{i}') for i in range(1, len(self.env.resources)+1)]
+                        evolution_probabilities, _ = self.get_transformed_evolutions(processing_resources, arrivals_coming=True, action=action)
                         for evolution, probability in evolution_probabilities.items():
                             if evolution == 'return_to_state':
                                 next_observation = s.copy()
+                                next_states.append((next_observation, probability, step_reward))
                             else:
                                 observation = s.copy()
-                                observation = self.process_observation(observation, action_name)
-                                next_observation = self.evolve_observation(observation, evolution)                   
-                            
-                            if type(next_observation) != tuple:
-                                next_observation, penalty = self.clip_observation(next_observation)
-                                reward = step_reward + penalty
-                                evolutions.append((next_observation, probability, reward))
-                            else:
-                                for next_obs in next_observation:
-                                    next_obs, penalty = self.clip_observation(next_obs)
+                                observation = self.process_observation(observation, action)
+                                next_observations = self.evolve_observation(observation, evolution)
+
+                                for next_observation, next_state_p in next_observations: # Some evolutions may lead to multiple states
+                                    next_observation, penalty = self.clip_observation(next_observation)
                                     reward = step_reward + penalty
-                                    evolutions.append((next_obs, probability * 0.5, reward)) # n_system case, so arrival can happen at both activities
+                                    next_states.append((next_observation, probability * next_state_p, reward)) # Scale the evolution probability with the state probability
 
                         sum = 0
-                        for next_observation, probability, reward in evolutions:
+                        for next_observation, probability, reward in next_states:
                             sum += probability * (reward + self.gamma * v[self.observation_to_index(next_observation)])
                         q[self.observation_to_index(s), i] = sum
  
@@ -316,20 +284,24 @@ def main():
     'n_system': 1.0014597219587165,
     'parallel': 0.6680392125284501,
     'down_stream': 0.6681612256898539,
-    'single_activity': 1.0042253394472318
+    'single_activity': 1.0042253394472318,
+    'composite': 0.1699383116459651,
     }
-    for config in ['slow_server', 'low_utilization', 'high_utilization']:	
+    for config in ['composite']:	
         tau = average_step_time_smdp[config] / 2
-        env = mdp.MDP(2500, config, tau)
+        if config == 'composite':
+            env = mdp_composite.MDP_composite(2500, config, tau)
+        else:
+            env = mdp.MDP(2500, config, tau)
 
         gamma = 1
         theta = 0.001
         vi = ValueIteration(env, gamma=gamma,theta=theta)
-        q, v, policy = vi.value_iteration()
-        directory = 'models/vi'
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-        np.save(f'{directory}/{config}.npy', policy)
+        # q, v, policy = vi.value_iteration()
+        # directory = 'models/vi'
+        # if not os.path.exists(directory):
+        #     os.makedirs(directory)
+        # np.save(f'{directory}/{config}_test.npy', policy)
 
 
     """

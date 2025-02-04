@@ -172,6 +172,16 @@ def main():
         'single_activity': 1.0042253394472318
     }
 
+    average_step_time_smdp = {
+        'slow_server': 0.595041322,
+        'low_utilization': 0.518518519,
+        'high_utilization': 0.620689655,
+        'n_system': 0.75,
+        'parallel': 0.571428571,
+        'down_stream': 0.571428571,
+        'single_activity': 0.865384615
+    }
+
     config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
     model_type = 'neural_network'#sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
     learning_iterations = 10

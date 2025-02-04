@@ -4,7 +4,7 @@ import numpy as np
 import random
 
 class SMDP_composite:
-    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None, reward_function='AUC'):
+    def __init__(self, nr_arrivals, config_type='composite', reporter=None, reward_function='AUC'):
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
@@ -24,7 +24,7 @@ class SMDP_composite:
         self.transitions = config['transitions']
 
         self.evolution_rates = {f'r{i}{task}': 1/self.resource_pools[task][f'r{i}'][0] 
-                     for i in range(1, 13) 
+                     for i in range(1, len(self.resources)+1) 
                      for task in self.task_types 
                      if f'r{i}' in self.resource_pools[task]}
         self.evolution_rates['arrival'] = self.arrival_rate
@@ -35,7 +35,37 @@ class SMDP_composite:
                                             if resource in self.resource_pools[task] and resource != 'r9'] + # r9 can only be assigned to one task
                             [f'waiting_{task}' for task in self.task_types])
         
-        self.action_space = [f"{resource}{task}" for resource in self.resources for task in self.task_types if resource in self.resource_pools[task] and task != 'Start'] + ['postpone', 'do_nothing']
+        self.action_space = [f"{resource}{task}" for resource in self.resources 
+                             for task in self.task_types 
+                             if resource in self.resource_pools[task] and task != 'Start'] 
+        
+        self.assignments = self.action_space.copy()
+        self.assignment_indices = {assignment: idx for idx, assignment in enumerate(self.assignments)}
+        # double actions
+        # high utilization
+        self.double_assignments =  [(ass1, ass2) 
+                                    for ass1 in ['r1a', 'r2a', 'r1b', 'r2b'] 
+                                    for ass2 in ['r3c', 'r4c']]
+        # slow server
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r3c', 'r4c', 'r3d', 'r4d'] 
+                                    for ass2 in ['r5e', 'r6e']]
+        # downstream
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r5e', 'r6e', 'r5f', 'r6f'] 
+                                    for ass2 in ['r7g', 'r8g']]
+        # n_system
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r7g', 'r8g', 'r7h', 'r8h'] 
+                                    for ass2 in ['r9j', 'r10i', 'r10j']]
+        # parallel
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r9j', 'r10i', 'r10j'] 
+                                    for ass2 in ['r11k', 'r12k', 'r11l', 'r12l']]
+        self.double_assignments += [('r11k', 'r12l'), ('r11l', 'r12k')]
+
+        self.action_space += self.double_assignments
+        self.action_space += ['postpone', 'do_nothing']
 
         self.waiting_cases = {task: [] for task in self.task_types}
         self.partially_completed_cases = []
@@ -65,76 +95,52 @@ class SMDP_composite:
         self.processing_times = {}
         self.waiting_starts = {}
         self.waiting_times = {}
-        self.observations = {}
 
         self.actions_taken = {}
         self.reporter = reporter
+        self.test = 0
 
     def observation(self):
-        is_available_r1, is_available_r2, is_available_r3, is_available_r4, \
-        is_available_r5, is_available_r6, is_available_r7, is_available_r8, \
-        is_available_r9, is_available_r10, is_available_r11, is_available_r12 = \
-            [1 if len(getattr(self, f'processing_r{i}')) == 0 else 0 for i in range(1, 13)]
-        assigned_r1a = 1 if not is_available_r1 and self.processing_r1[-1][1] == 'a' else 0
-        assigned_r1b = 1 if not is_available_r1 and self.processing_r1[-1][1] == 'b' else 0
-        assigned_r2a = 1 if not is_available_r2 and self.processing_r2[-1][1] == 'a' else 0
-        assigned_r2b = 1 if not is_available_r2 and self.processing_r2[-1][1] == 'b' else 0
-        assigned_r3c = 1 if not is_available_r3 and self.processing_r3[-1][1] == 'c' else 0
-        assigned_r3d = 1 if not is_available_r3 and self.processing_r3[-1][1] == 'd' else 0
-        assigned_r4c = 1 if not is_available_r4 and self.processing_r4[-1][1] == 'c' else 0
-        assigned_r4d = 1 if not is_available_r4 and self.processing_r4[-1][1] == 'd' else 0
-        assigned_r5e = 1 if not is_available_r5 and self.processing_r5[-1][1] == 'e' else 0
-        assigned_r5f = 1 if not is_available_r5 and self.processing_r5[-1][1] == 'f' else 0
-        assigned_r6e = 1 if not is_available_r6 and self.processing_r6[-1][1] == 'e' else 0
-        assigned_r6f = 1 if not is_available_r6 and self.processing_r6[-1][1] == 'f' else 0
-        assigned_r7g = 1 if not is_available_r7 and self.processing_r7[-1][1] == 'g' else 0
-        assigned_r7h = 1 if not is_available_r7 and self.processing_r7[-1][1] == 'h' else 0
-        assigned_r8g = 1 if not is_available_r8 and self.processing_r8[-1][1] == 'g' else 0
-        assigned_r8h = 1 if not is_available_r8 and self.processing_r8[-1][1] == 'h' else 0
-        assigned_r9j = 1 if not is_available_r9 and self.processing_r9[-1][1] == 'j' else 0
-        assigned_r10i = 1 if not is_available_r10 and self.processing_r10[-1][1] == 'i' else 0
-        assigned_r10j = 1 if not is_available_r10 and self.processing_r10[-1][1] == 'j' else 0
-        assigned_r11k = 1 if not is_available_r11 and self.processing_r11[-1][1] == 'k' else 0
-        assigned_r11l = 1 if not is_available_r11 and self.processing_r11[-1][1] == 'l' else 0
-        assigned_r12k = 1 if not is_available_r12 and self.processing_r12[-1][1] == 'k' else 0
-        assigned_r12l = 1 if not is_available_r12 and self.processing_r12[-1][1] == 'l' else 0
-
+        processing_resources = self.get_processing_resources()
+        # Check if the resources are available (resource 1 has index 0)
+        is_available_resources = [1 if len(processing_resources[i]) == 0 else 0 for i in range(len(processing_resources))]
+        # Check which assignments are assigned
+        assigned_assignments = [0 if not is_available_resources[int(assignment[1:-1])-1] 
+                                and getattr(self, f'processing_r{int(assignment[1:-1])}')[-1][1] == assignment[-1] 
+                                else 1
+                                for assignment in self.assignments]
+        # Check the number of waiting cases at each activity
         waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
 
-        return [is_available_r1, is_available_r2, is_available_r3, is_available_r4,
-                is_available_r5, is_available_r6, is_available_r7, is_available_r8, 
-                is_available_r9, is_available_r10, is_available_r11, is_available_r12,
-                assigned_r1a, assigned_r1b, assigned_r2a, assigned_r2b, assigned_r3c, assigned_r3d,
-                assigned_r4c, assigned_r4d, assigned_r5e, assigned_r5f, assigned_r6e, assigned_r6f,
-                assigned_r7g, assigned_r7h, assigned_r8g, assigned_r8h, assigned_r9j, assigned_r10i,
-                assigned_r10j, assigned_r11k, assigned_r11l, assigned_r12k, assigned_r12l] + waiting_cases
+        return is_available_resources + assigned_assignments + waiting_cases
 
     def action_mask(self):
         processing_resources = self.get_processing_resources()
-        availability = [True if len(processing_resources[i]) == 0 else False for i in range(len(processing_resources))]
-
+        # Check if the resources are available (resource 1 has index 0)
+        is_available_resources = [True if len(processing_resources[i]) == 0 else False for i in range(len(processing_resources))]
+        # Check if there are tasks waiting for the resources
         is_waiting_tasks = {task: len(self.waiting_cases[task]) > 0 for task in self.task_types if task != 'Start'}
-        possible_actions = [availability[i] and is_waiting_tasks[task] 
-                                for i in range(len(processing_resources)) 
-                                for task in self.task_types 
-                                if f'r{i + 1}{task}' in self.action_space]
-        
-        r1a_possible, r1b_possible, r2a_possible, r2b_possible, r3c_possible, r3d_possible, \
-        r4c_possible, r4d_possible, r5e_possible, r5f_possible, r6e_possible, r6f_possible, \
-        r7g_possible, r7h_possible, r8g_possible, r8h_possible, r9j_possible, r10i_possible, \
-        r10j_possible, r11k_possible, r11l_possible, r12k_possible, r12l_possible = possible_actions
+        # Check which assignments are possible
+        assignments_possible = [is_available_resources[int(assignment[1:-1])-1] 
+                                and is_waiting_tasks[assignment[-1]] 
+                                for assignment in self.assignments]
+        # Check which double assignments are possible based on the single assignments
+        double_assignments_possible = [assignments_possible[self.assignment_indices[assignment[0]]]
+                                        and assignments_possible[self.assignment_indices[assignment[1]]] 
+                                        for assignment in self.double_assignments]
 
-        assignments_possible = [r1a_possible, r1b_possible, r2a_possible, r2b_possible, r3c_possible, r3d_possible,
-                                r4c_possible, r4d_possible, r5e_possible, r5f_possible, r6e_possible, r6f_possible,
-                                r7g_possible, r7h_possible, r8g_possible, r8h_possible, r9j_possible, r10i_possible,
-                                r10j_possible, r11k_possible, r11l_possible, r12k_possible, r12l_possible]
-        if self.arrivals_coming():            
-            postpone_possible = any(possible_actions) and not (r1a_possible and r2a_possible and sum(assignments_possible) == 2)
+        if self.arrivals_coming():
+            # When arrivals are coming, postponing is possible when there are tasks waiting for the resources
+            # However, if there are only tasks at a, and resource 1 and 2 are not assigned, we don't allow postponing
+            postpone_possible = (any(assignments_possible) 
+                                 and not (assignments_possible[self.assignment_indices['r1a']] 
+                                          and assignments_possible[self.assignment_indices['r2a']] 
+                                          and sum(assignments_possible) == 2))
         else:
-            postpone_possible = any(possible_actions)
+            postpone_possible = any(assignments_possible)
         do_nothing_possible = not postpone_possible
-
-        return assignments_possible + [postpone_possible, do_nothing_possible]
+        
+        return assignments_possible + double_assignments_possible + [postpone_possible, do_nothing_possible]
 
     def reset(self):
         self.waiting_cases = {task: [] for task in self.task_types}
@@ -158,6 +164,7 @@ class SMDP_composite:
         self.nr_arrivals = self.original_nr_arrivals
         self.arrival_times = {}
         self.cycle_times = {}
+
         self.processing_starts = {}
         self.processing_times = {}
         self.waiting_starts = {}
@@ -168,41 +175,29 @@ class SMDP_composite:
         # cases, list of processing, total time, total arrivals, nr arrivals
         nr_arrivals = self.nr_arrivals if rollout_length is None else self.nr_arrivals + rollout_length
         return ({task: cases.copy() for task, cases in self.waiting_cases.items()},
-            [self.processing_r1.copy(),
-            self.processing_r2.copy(),
-            self.processing_r3.copy(),
-            self.processing_r4.copy(),
-            self.processing_r5.copy(),
-            self.processing_r6.copy(),
-            self.processing_r7.copy(),
-            self.processing_r8.copy(),
-            self.processing_r9.copy(),
-            self.processing_r10.copy(),
-            self.processing_r11.copy(),
-            self.processing_r12.copy()],
+            [processing_resouce.copy() for processing_resouce in self.get_processing_resources()],
             self.total_time,
             self.total_arrivals,
             nr_arrivals,
             self.partially_completed_cases.copy())
 
     def set_state(self, state):
+        self.reset()
         # cases, list of processing, total time, total arrivals, nr arrivals
         self.waiting_cases = {task: cases.copy() for task, cases in state[0].items()}
-        for i in range(1, 13):
+        for i in range(1, len(self.resources)+1):
             setattr(self, f'processing_r{i}', state[1][i-1].copy())
         self.total_time = state[2]
         self.total_arrivals = state[3]
         self.nr_arrivals = state[4]
         self.partially_completed_cases = state[5].copy()
-        self.locked_action = None
 
     def sample_next_task(self, current_task, case_id=None):
         # Calculate the sum of the values
         p_transitions = self.transitions[current_task]
         total_sum = sum(p_transitions)
-
         if current_task == 'Complete':
-            raise ValueError('The current task cannot be Complete.')
+            raise ValueError('The current task cannot be "Complete".')
         elif current_task == 'i' or current_task == 'j': # If the parallel task is i or j, return k and l
             return ['k', 'l']
         elif current_task == 'k' or current_task == 'l': # If the parallel task is k or l, return Complete
@@ -226,65 +221,71 @@ class SMDP_composite:
         action should be a (feasible) action from the action space. \n
         For the MDP, the selected action is used to determine the possible evolutions.
         """
-        processing_resources = self.get_processing_resources()
-        is_available_resources = [len(processing_resources[i]) == 0 for i in range(len(processing_resources))]
+        
         # Create evolution dictionary depending on arrivals_coming
-        evolution_rates = {'arrival': self.evolution_rates['arrival'] if arrivals_coming else 0}
-
-        for i in range(1, 13):
-            for task in self.task_types:
-                key = f'r{i}{task}'
-                if not is_available_resources[i-1] and processing_resources[i-1][0][1] == task:
-                    evolution_rates[key] = self.evolution_rates[key]
-
-        # evolution_rates = {key: value for key, value in evolution_rates.items() if value > 0}
-
+        evolution_rates = {
+            assignment:self.evolution_rates[assignment] 
+            for assignment in self.assignments 
+            if len(processing_resources[int(assignment[1:-1])-1]) > 0 # The resource is assigned
+            and processing_resources[int(assignment[1:-1])-1][-1][1] == assignment[-1] # Task is assigned to resource
+            }
+        if arrivals_coming:
+            evolution_rates['arrival'] = self.evolution_rates['arrival']
+        
         # add possible evolution based on action 
-        if action and action not in ['postpone', 'do_nothing']:
-            evolution_rates[action] = self.evolution_rates[action]
+        if action is not None and action not in ['postpone', 'do_nothing']:
+            if isinstance(action, tuple):
+                for act in action:
+                    evolution_rates[act] = 1/self.resource_pools[act[-1]][act[:-1]][0]
+            else:
+                evolution_rates[action] = 1/self.resource_pools[action[-1]][action[:-1]][0]
         return evolution_rates
 
     def get_evolutions(self, processing_resources, arrivals_coming, action=None):
         evolution_rates = self.get_evolution_rates(processing_resources, arrivals_coming, action)
         sum_of_rates = sum(evolution_rates.values())
-        evolutions = {}
-        for evolution, rate in evolution_rates.items():
-            evolutions[evolution] = rate/sum_of_rates
+        evolutions = {evolution: rate/sum_of_rates for evolution, rate in evolution_rates.items()}
         return evolutions, evolution_rates
 
     def arrivals_coming(self):
         return 1 if self.total_arrivals < self.nr_arrivals else 0
    
     def is_done(self):
-        return self.total_time > 100000
         """
         The simulation is done if we have reached the maximum number of arrivals and there are no more tasks to process.
         """
-        cases_processing = sum(len(is_processing) for is_processing in self.get_processing_resources())
-        waiting_cases = sum(len(v) for v in self.waiting_cases.values())
-        return not self.arrivals_coming() and cases_processing == 0 and waiting_cases == 0
+        return (not self.arrivals_coming() 
+                and sum(len(v) for v in self.waiting_cases.values()) == 0
+                and sum(len(is_processing) for is_processing in self.get_processing_resources()) == 0)
     
     def get_processing_resources(self):
-        return [getattr(self, f'processing_r{i}') for i in range(1, 13)]
+        return [getattr(self, f'processing_r{i}') for i in range(1, len(self.resources)+1)]
 
     def step(self, action):
         reward = 0
-        action_index = action.index(1)
-        action = self.action_space[action_index]
-        if action not in self.actions_taken:
-            self.actions_taken[action] = 0
-        self.actions_taken[action] += 1
+        # The action is passed as a binary list (neural network). We need to convert it to the action name
+        # The heuristics return the action name directly or a tuple of two actions
+        if isinstance(action, list):
+            action_index = action.index(1)
+            action = self.action_space[action_index]
         # process the action, 'postpone' and 'do nothing', do nothing to the state.
-        if action.startswith('r'): # only assignments start with r (i.e., r1a)
-            resource, task = action[0:-1], action[-1]
-            if len(self.waiting_cases[task]) > 0:
-                case_id = self.waiting_cases[task].pop(0)
-                self.processing_starts[case_id][(task, resource)] = self.total_time
-                self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
-                getattr(self, f'processing_{resource}').append((case_id, task))
-                if self.reporter:
-                    self.reporter.callback(getattr(self, f'processing_{resource}')[-1][0], task, '<task:start>', self.total_time, resource)
-
+        if action not in ['postpone', 'do_nothing']:       
+            if isinstance(action, str):
+                actions = [action]
+            else:
+                actions = action
+            for act in actions:
+                resource, task = act[0:-1], act[-1]
+                if self.waiting_cases[task]:
+                    case_id = self.waiting_cases[task].pop(0)
+                    self.processing_starts[case_id][(task, resource)] = self.total_time
+                    self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
+                    getattr(self, f'processing_{resource}').append((case_id, task))
+                    if self.reporter:
+                        self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
+                else:
+                    raise Exception(f'No cases waiting for task {task} to be processed by resource {resource}')
+        
         # now calculate the next state and how long it takes to reach that state
         # the time is to the next state is exponentially distributed with rate
         # min(lambda, mu_(r1, a) * active r1, mu_(r2, a) * active r2) = 
@@ -293,12 +294,12 @@ class SMDP_composite:
         # an arrival, r1 processing the task or r2 processing the task
         # the probability of one of these evolutions happening is proportional to the rate of that evolution.
         evolutions, evolution_rates = self.get_evolutions(self.get_processing_resources(), self.arrivals_coming())
+
         if self.reward_function == 'AUC':
-            unique_active_cases = set()
-            for i in range(1, 13):
-                processing_case = [getattr(self, f'processing_r{i}')[0][0]] if len(getattr(self, f'processing_r{i}')) > 0 else []
-                unique_active_cases.update(processing_case)
-            
+            # Create set of unique active cases
+            unique_active_cases = {getattr(self, f'processing_r{i}')[0][0] 
+                                   for i in range(1, len(self.resources)+1) 
+                                   if len(getattr(self, f'processing_r{i}')) > 0}            
             for task in self.task_types:
                 unique_active_cases.update(self.waiting_cases[task])
 
@@ -355,73 +356,133 @@ class SMDP_composite:
             if self.reward_function == 'AUC':
                 reward += time * -len(unique_active_cases)
             self.episodic_reward += reward
-            observation = self.observation()
-            if tuple(observation) not in self.observations:
-                self.observations[tuple(observation)] = 0
-            self.observations[tuple(observation)] += 1
-            return observation, reward, self.is_done(), False, None
+            return self.observation(), reward, self.is_done(), False, None
 
-def random_policy(env):
-    action_mask = env.action_mask()
-    action = [0] * len(action_mask)
-    choices = [i for i in range(len(action_mask)) if action_mask[i] and env.action_space[i] not in ['postpone', 'do_nothing']]
-    if len(choices) == 0:
-        possible_action = 'postpone' if action_mask[env.action_space.index('postpone')] else 'do_nothing'
-        action_index = env.action_space.index(possible_action)
-        action[action_index] = 1
-        return action
-    else:
-        action_index = np.random.choice(choices)
-        action[action_index] = 1
-        return action
-ACTION_R10I = 0
-ACTION_R10J = 0
-ACTION_R9J = 0
 def greedy_policy(env):
-    action_mask = env.action_mask()
-    action = [0] * len(action_mask)
-    # if action_mask[env.action_space.index('r10i')]:
-    #     action[env.action_space.index('r10i')] = 1
-    #     return action
+    action_mask = env.action_mask()  
+    if sum(action_mask) == 1: # only do nothing possible
+        #print('Locked action:', env.action_space[action_mask.index(1)])
+        return env.action_space[action_mask.index(1)]
+
+    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
+    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
+    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
+
     min_processing_time = float('inf')
-    best_action_index = []
-    for i, possible in enumerate(action_mask):
-        if possible:
-            action_str = env.action_space[i]
-            if action_str in ['postpone', 'do_nothing']:
-                continue # skips this iteration
-            resource, task = action_str[0:-1], action_str[-1]
+    lowest_processing_times = []
+
+    for assignment in assignments:
+        resource, task = assignment[0:-1], assignment[-1]
+        processing_time = env.resource_pools[task][resource][0]
+        if processing_time < min_processing_time:
+            min_processing_time = processing_time
+            lowest_processing_times = [assignment]
+        elif processing_time == min_processing_time:
+            lowest_processing_times.append(assignment)
+
+    assignment = random.choice(lowest_processing_times)
+    possible_double_assignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
+
+    if len(possible_double_assignments) > 0:
+        min_processing_time = float('inf')
+        lowest_processing_times = []
+
+        for double_assignment in possible_double_assignments:
+            if double_assignment[0] == assignment:
+                other_action = double_assignment[1]
+            else:
+                other_action = double_assignment[0]
+            resource, task = other_action[0:-1], other_action[-1]
             processing_time = env.resource_pools[task][resource][0]
             if processing_time < min_processing_time:
                 min_processing_time = processing_time
-                best_action_index = [i]
+                lowest_processing_times = [double_assignment]
             elif processing_time == min_processing_time:
-                best_action_index.append(i)
+                lowest_processing_times.append(double_assignment)
     
-    if len(best_action_index) == 1:
-        action[best_action_index[0]] = 1
-    elif len(best_action_index) > 1:
-        action_index = np.random.choice(best_action_index)
-        action[action_index] = 1
+    if len(lowest_processing_times) > 0:
+        return random.choice(lowest_processing_times)
     else:
-        # If no valid action found, default to 'do_nothing' or 'postpone' if available
-        if action_mask[env.action_space.index('postpone')] == 1:
-            action[env.action_space.index('postpone')] = 1
-        elif action_mask[env.action_space.index('do_nothing')] == 1:
-            action[env.action_space.index('do_nothing')] = 1   
-    action_index = action.index(1)
-    action_str = env.action_space[action_index]
-    if action_str == 'r10i':
-        global ACTION_R10I
-        ACTION_R10I += 1
-    elif action_str == 'r10j':
-        global ACTION_R10J
-        ACTION_R10J += 1
-    elif action_str == 'r9j':
-        global ACTION_R9J
-        ACTION_R9J += 1
-    return action
+        return assignment
 
+def fifo_policy(env):
+    action_mask = env.action_mask()
+    if sum(action_mask) == 1: # only do nothing possible
+        return 'do_nothing'
+    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action] # Excluding postpone, do_nothing
+    possible_tasks = [action[-1] for action in possible_actions if isinstance(action, str)]
+
+    # Identify the case that has been in the system the longest
+    all_waiting_cases = sorted([(case_id, task) for task in env.waiting_cases for case_id in env.waiting_cases[task] if task in possible_tasks], key=lambda x: x[0])
+    # print('Waiting cases:', all_waiting_cases)
+    # print('Possible actions:', possible_actions)
+
+    i = 0
+    while i < len(all_waiting_cases):
+        longest_waiting_case_id = all_waiting_cases[i][0] # if len(all_waiting_cases) > 0 else None
+        longest_case_tasks = [(case_id, task) for case_id, task in all_waiting_cases if case_id == longest_waiting_case_id]
+        
+        # Identify if the longest waiting case can be processed        
+        longest_waiting_case_tasks = [task for case_id, task in longest_case_tasks]
+        if len(longest_waiting_case_tasks) == 0:
+            i += 1
+            continue
+        random.shuffle(longest_waiting_case_tasks) # Randomly assign a task of the longest waiting case
+        selected_task = longest_waiting_case_tasks[0]
+
+        # Get an assignment with the selected task (of the longest waiting case)
+        possible_assignments = [action for action in possible_actions if action[-1] == selected_task]
+        if len(possible_assignments) > 0:
+            assignment = random.choice([action for action in possible_actions if action[-1] == selected_task])
+        else:
+            i += 1
+            continue
+        #print('Selected assignment:', assignment)
+        # Create list of possible double assignments
+        possible_double_assignments = [double_assignment for double_assignment in possible_actions if isinstance(double_assignment, tuple) and assignment in double_assignment]
+
+        #print(possible_double_assignments)
+        if len(possible_double_assignments) > 0:
+            checked_case_ids = []
+            # Check for each case if the selected task is in the double assignment
+            for (case_id, task) in all_waiting_cases:
+                #print('checking case:', case_id)
+                if case_id not in checked_case_ids:
+                    checked_case_ids.append(case_id)
+                else:
+                    continue
+                # Create list of tasks of the (second) longest waiting case
+                tasks_of_case_id = [task2 for case_id2, task2 in all_waiting_cases if case_id2 == case_id]
+                #print('Tasks of case:', case_id, tasks_of_case_id)
+                possible_double_assignments_case = []
+                for task2 in tasks_of_case_id:
+                    if task2 != selected_task:
+                        test = [double_assignment for double_assignment in possible_double_assignments if task2 in double_assignment[0] or task2 in double_assignment[1]]
+                        #print('Additional double assignmetns:', test)
+                        possible_double_assignments_case += test#[double_assignment for double_assignment in possible_double_assignments if (task2 in action[0] or task2 in action[1]) and task2 != selected_task]
+                if len(possible_double_assignments_case) > 0:
+                    assignment = random.choice(possible_double_assignments_case)
+                    #print('returned assignment', assignment, '\n')
+                    return tuple(assignment)
+        else:
+            #print('returned assignment', assignment, '\n')
+            return assignment
+
+def random_policy(env):
+    action_mask = env.action_mask()  
+    if sum(action_mask) == 1: # only do nothing possible
+        return env.action_space[action_mask.index(1)]
+    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
+    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
+    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
+
+    assignment = random.choice(assignments)
+    possible_double_asignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
+
+    if len(possible_double_asignments) > 0:
+        return tuple(random.choice(possible_double_asignments))
+    else:
+        return assignment
 
 if __name__ == '__main__':
     # smdp = SMDP_composite(2500, 'complete')
@@ -471,37 +532,26 @@ if __name__ == '__main__':
 
     # print('Evolutions:', smdp.get_evolutions(smdp.get_processing_resources(), smdp.arrivals_coming(), 'r1a'))
 
-
-
-
-
-
-
-
-    nr_replications = 10
+    nr_replications = 100
     avg_cycle_times = []
     total_rewards = []
     for _ in range(nr_replications):
         time_iter = 1
         #reporter = EventLogReporter("smdp_log.txt")
         reporter = ProcessReporter()
-        env = SMDP_composite(1000000, 'complete')
+        env = SMDP_composite(2500, 'complete')
 
         done = False
         steps = 0
         total_reward = 0
         while not done:        
-            action = greedy_policy(env)            
+            action = fifo_policy(env)            
             state, reward, done, _, _ = env.step(action)
             total_reward += reward
             time = env.total_time
             steps += 1
-            if time > time_iter * 2500:
-                time_iter += 1
-                print('action r10j:', ACTION_R10J, 'action r10i:', ACTION_R10I, 'action r9j:', ACTION_R9J)
-                ACTION_R10I = 0
-                ACTION_R10J = 0 
-                ACTION_R9J = 0                
+
+              
         print(env.total_arrivals, env.total_time)
         avg_cycle_times.append(np.mean(list(env.cycle_times.values())))
         total_rewards.append(total_reward)
@@ -531,8 +581,8 @@ if __name__ == '__main__':
     avg_cycle_times = np.array(avg_cycle_times)
     total_rewards = np.array(total_rewards)
     print('mean CT:', np.mean(avg_cycle_times))
-    print('95% CI CT:', np.percentile(avg_cycle_times, [2.5, 97.5]))
+    print('95% CI CT:', [np.mean(avg_cycle_times)-1.96*np.std(avg_cycle_times)/np.sqrt(len(avg_cycle_times)), np.mean(avg_cycle_times)+1.96*np.std(avg_cycle_times)/np.sqrt(len(avg_cycle_times))])
     print('mean reward:', np.mean(total_rewards))
-    print('95% CI reward:', np.percentile(total_rewards, [2.5, 97.5]))
-    reporter.print_result()
-    print('Actions taken:', env.actions_taken)
+    print('95% CI reward:', [np.mean(total_rewards)-1.96*np.std(total_rewards)/np.sqrt(len(total_rewards)), np.mean(total_rewards)+1.96*np.std(total_rewards)/np.sqrt(len(total_rewards))])
+    print('\n')
+    #reporter.print_result()

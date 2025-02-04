@@ -203,69 +203,69 @@ def main():
     Training of the policies
     """
 
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'down_stream'
-    model_type = 'neural_network' #sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
-    learning_iterations = 10
+    # config_type = sys.argv[1] if len(sys.argv) > 1 else 'down_stream'
+    # model_type = 'neural_network' #sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
+    # learning_iterations = 10
 
-    dir = f".//models//pi//smdp//{config_type}//"
-    if not os.path.exists(dir):
-        os.makedirs(dir, exist_ok=True)
+    # dir = f".//models//pi//smdp//{config_type}//"
+    # if not os.path.exists(dir):
+    #     os.makedirs(dir, exist_ok=True)
 
-    print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+    # print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
 
-    learn(config_type,
-        smdp.random_policy,
-        dir,
-        learning_iterations=learning_iterations,
-        episode_length=2500, # nr_cases
-        nr_states_to_explore=100,
-        nr_rollouts=100,
-        nr_steps_per_rollout=50,
-        model_type=model_type)
+    # learn(config_type,
+    #     smdp.random_policy,
+    #     dir,
+    #     learning_iterations=learning_iterations,
+    #     episode_length=2500, # nr_cases
+    #     nr_states_to_explore=100,
+    #     nr_rollouts=100,
+    #     nr_steps_per_rollout=50,
+    #     model_type=model_type)
 
 
     """
     Evaluation of the learned policies
     """
-    # config_type = sys.argv[1] if len(sys.argv) > 1 else ''
-    # env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
-    # policy = 'fifo'
+    config_type = sys.argv[1] if len(sys.argv) > 1 else ''
+    env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
+    policy = 'fifo'
 
-    # # config_types = ['n_system', 'high_utilization', 'down_stream', 'low_utilization', 'parallel', 'single_activity', 'slow_server']
-    # # env_type = 'mdp'
-    # for config_type in ['n_system', 'high_utilization', 'down_stream', 'low_utilization', 'parallel', 'single_activity', 'slow_server']:
-    #     for policy in ['vi']:
-    #         for env_type in ['smdp']:
-    #             print(config_type, env_type, policy)
-    #             #env_type = 'mdp'
-    #             results_dir = f".//results//"
+    # config_types = ['n_system', 'high_utilization', 'down_stream', 'low_utilization', 'parallel', 'single_activity', 'slow_server']
+    # env_type = 'mdp'
+    for config_type in ['slow_server']:
+        for policy in ['vi']:
+            for env_type in ['smdp']:
+                print(config_type, env_type, policy)
+                #env_type = 'mdp'
+                results_dir = f".//results//"
 
-    #             env = smdp.SMDP(2500, config_type, reward_function='AUC')
+                env = smdp.SMDP(2500, config_type, reward_function='AUC')
                 
-    #             if policy == 'greedy':
-    #                 pl = smdp.greedy_policy
-    #             elif policy == 'random':
-    #                 pl = smdp.random_policy
-    #             elif policy == 'fifo':
-    #                 pl = smdp.fifo_policy
-    #             elif policy == 'threshold':
-    #                 pl = smdp.threshold_policy
-    #             elif policy == 'vi':
-    #                 filename = f"./models/vi/{config_type}.npy"
-    #                 pl = policy_learner.ValueIterationPolicy(env, max_queue=50, file=filename)
-    #             elif policy == 'pi':
-    #                 filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.keras"
-    #                 pl = policy_learner.PolicyLearner.load(filename)
+                if policy == 'greedy':
+                    pl = smdp.greedy_policy
+                elif policy == 'random':
+                    pl = smdp.random_policy
+                elif policy == 'fifo':
+                    pl = smdp.fifo_policy
+                elif policy == 'threshold':
+                    pl = smdp.threshold_policy
+                elif policy == 'vi':
+                    filename = f"./models/vi/{config_type}_test.npy"
+                    pl = policy_learner.ValueIterationPolicy(env, max_queue=50, file=filename)
+                elif policy == 'pi':
+                    filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.keras"
+                    pl = policy_learner.PolicyLearner.load(filename)
 
-    #             evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300, 
-    #                             results_dir=results_dir, env_type=env_type)
+                evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300, 
+                                results_dir=results_dir, env_type=env_type)
                 
-    #             #nr_models = len([f for f in os.listdir(filename_folder) if f.endswith(extension)])
-    #             # for i in range(1, nr_models):
-    #             #     filename = filename_folder + f"{config_type}.v{i}.{extension}"
-    #             #     evaluate_policy(filename, config_type, episode_length=3000, nr_rollouts=1, 
-    #             #                     results_dir=results_dir, env_type=env_type)
-    #             print('\n')
+                #nr_models = len([f for f in os.listdir(filename_folder) if f.endswith(extension)])
+                # for i in range(1, nr_models):
+                #     filename = filename_folder + f"{config_type}.v{i}.{extension}"
+                #     evaluate_policy(filename, config_type, episode_length=3000, nr_rollouts=1, 
+                #                     results_dir=results_dir, env_type=env_type)
+                print('\n')
 
 if __name__ == '__main__':
     main()

@@ -72,7 +72,7 @@
                                                        "r2": [10.0, 1]}},
                     "transitions"             : {"Start": [0, 1, 0],
                                                  "a"    : [0, 0, 1]}},
-"complete"        :{"mean_interarrival_time"  : 2,
+"composite"       :{"mean_interarrival_time"  : 2,
                     "task_types"              : ["Start", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"],
                     "resources"               : ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"],
                     "resource_pools"          : {"a": {"r1" : [1.6, 1],
