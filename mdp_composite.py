@@ -258,8 +258,6 @@ class MDP_composite:
     def get_transformed_evolutions(self, processing_resources, arrivals_coming, action=None):
         evolutions, evolution_rates = self.get_evolutions(processing_resources, arrivals_coming, action)
         sum_of_rates = sum(evolution_rates.values())
-        if sum_of_rates == 0:
-            print(evolutions, evolution_rates, self.is_done(), self.arrivals_coming(), action, env.action_mask())
         expected_next_event_time = 1 / sum_of_rates
         transformed_evolutions = {evolution: self.tau / expected_next_event_time * p 
                                   for evolution, p in evolutions.items()}
@@ -476,9 +474,9 @@ def fifo_policy(env):
                 possible_double_assignments_case = []
                 for task2 in tasks_of_case_id:
                     if task2 != selected_task:
-                        test = [double_assignment for double_assignment in possible_double_assignments if task2 in double_assignment[0] or task2 in double_assignment[1]]
-                        #print('Additional double assignmetns:', test)
-                        possible_double_assignments_case += test#[double_assignment for double_assignment in possible_double_assignments if (task2 in action[0] or task2 in action[1]) and task2 != selected_task]
+                        possible_double_assignments_case += [double_assignment 
+                                                             for double_assignment in possible_double_assignments 
+                                                             if task2 in double_assignment[0] or task2 in double_assignment[1]]
                 if len(possible_double_assignments_case) > 0:
                     assignment = random.choice(possible_double_assignments_case)
                     #print('returned assignment', assignment, '\n')

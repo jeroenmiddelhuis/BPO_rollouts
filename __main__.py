@@ -40,7 +40,7 @@ def learn(config_type,
             pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
             
             print('Evaluating new policy..')
-            new_policy_reward = np.mean(rollouts.evaluate_policy(env, pl.policy, nr_rollouts=100, nr_arrivals=2500))
+            new_policy_reward = np.mean(rollouts.evaluate_policy(env, pl.policy, nr_rollouts=300, nr_arrivals=2500))
             print('Reward of policy version', i+1, ':', new_policy_reward)
             print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i+1}: {new_policy_reward}.")
             if new_policy_reward < best_policy_reward: # Higher reward is better (less negative)
@@ -92,7 +92,7 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
             
             if env_type == 'smdp':
                 if config_type == 'single_activity':
-                    rewards = rollouts.evaluate_policy(env, smdp.threshold_policy, nr_rollouts)
+                    rewards, cycle_times = rollouts.evaluate_policy(env, smdp.threshold_policy, nr_rollouts)
                     average_reward = np.mean(rewards)
                     std_reward = np.std(rewards)
                     results_file.write(f"Threshold, {env_type}, {average_reward}, {std_reward}\n")
@@ -116,8 +116,8 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
                 results_file.write(f"FIFO, {env_type}, {average_reward}, {std_reward}\n")
                 print('FIFO policy:', average_reward)
 
-def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=100, results_dir=None, env_type='smdp'):
-    env = smdp.SMDP(episode_length, config_type)
+def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=100, results_dir=None, env_type='smdp', results_string = ''):
+    env = smdp.SMDP(episode_length, config_type, track_cycle_times=True)
     pl_name = None
     if pl == smdp.greedy_policy:
         pl_name = 'spt'
@@ -138,17 +138,17 @@ def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=100, 
     os.makedirs(results_dir, exist_ok=True)
     if pl_name == 'pi':
         results_file_path = os.path.join(results_dir, f'{pl_name}_{env_type}_{config_type}.txt')
+        #results_file_path = os.path.join(results_dir, f'{pl_name}_{results_string}.txt')
     else:        
         results_file_path = os.path.join(results_dir, f'{pl_name}_{config_type}.txt')
 
-    with open(results_file_path, 'a') as results_file:
-        results_file.write(f"mean,std\n")
+    with open(results_file_path, 'w') as results_file:
+        results_file.write(f"mean_reward,std_reward,mean_cycle_time,std_cycle_time\n")
         if pl_name in ['pi', 'vi']:
-            rewards = rollouts.evaluate_policy(env, pl.policy, nr_rollouts)
+            rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, parallel=True)
         else:
-            rewards = rollouts.evaluate_policy(env, pl, nr_rollouts)
-        print(np.mean(rewards), np.std(rewards))
-        results_file.write(f"{np.mean(rewards)},{np.std(rewards)}")
+            rewards, cycle_times = rollouts.evaluate_policy(env, pl, nr_rollouts, parallel=True)
+        results_file.write(f"{np.mean(rewards)},{np.std(rewards)},{np.mean(cycle_times)},{np.std(cycle_times)}")
 
 
 def compare_all_states(filename, episode_length=10, nr_rollouts=100):
@@ -214,7 +214,7 @@ def main():
     # print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
 
     # learn(config_type,
-    #     smdp.random_policy,
+    #     smdp.greedy_policy,
     #     dir,
     #     learning_iterations=learning_iterations,
     #     episode_length=2500, # nr_cases
@@ -227,20 +227,27 @@ def main():
     """
     Evaluation of the learned policies
     """
-    config_type = sys.argv[1] if len(sys.argv) > 1 else ''
-    env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
-    policy = 'fifo'
+    nr_rollouts = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+    nr_steps_per_rollout = int(sys.argv[2]) if len(sys.argv) > 2 else 50
+    tau_multiplier = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 
-    # config_types = ['n_system', 'high_utilization', 'down_stream', 'low_utilization', 'parallel', 'single_activity', 'slow_server']
+    config_type = 'slow_server'
+    env_type = 'mdp'
+    # config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+    # env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
+    policy = 'pi'
+
+    config_types = ['n_system', 'high_utilization', 'down_stream', 'low_utilization', 'parallel', 'single_activity', 'slow_server']
     # env_type = 'mdp'
-    for config_type in ['slow_server']:
-        for policy in ['vi']:
+
+    for policy in ['greedy', 'random', 'fifo', 'vi']:
+        for config_type in config_types:
             for env_type in ['smdp']:
                 print(config_type, env_type, policy)
                 #env_type = 'mdp'
                 results_dir = f".//results//"
 
-                env = smdp.SMDP(2500, config_type, reward_function='AUC')
+                env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
                 
                 if policy == 'greedy':
                     pl = smdp.greedy_policy
@@ -251,10 +258,11 @@ def main():
                 elif policy == 'threshold':
                     pl = smdp.threshold_policy
                 elif policy == 'vi':
-                    filename = f"./models/vi/{config_type}_test.npy"
+                    filename = f"./models/vi/{config_type}.npy"
                     pl = policy_learner.ValueIterationPolicy(env, max_queue=50, file=filename)
                 elif policy == 'pi':
                     filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.keras"
+                    #filename = f"./models/pi/{env_type}/tuning/{config_type}_{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}/{config_type}.best_policy.keras"
                     pl = policy_learner.PolicyLearner.load(filename)
 
                 evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300, 

@@ -19,10 +19,12 @@ class Environment(Env):
             low=0, high=1, shape=(len(self.env.state_space),), dtype=np.float64)
 
     def normalize_observation(self, observation):
-        if len(observation) == 5: # single_activity
+        if len(observation) == 3: # single_activity
             observation[-1] = np.minimum(1.0, observation[-1] / 100.0)
-        else: # Other 2 activity scenarios
+        elif len(observation) <= 8: # 2 activity scenarios
             observation[-2:] = np.minimum(1.0, observation[-2:] / 100.0)
+        else: # composite model
+            observation[-12:] = np.minimum(1.0, observation[-12:] / 100.0)
         return observation
 
     def reset(self, seed=None):
@@ -34,7 +36,16 @@ class Environment(Env):
         #     print("Number of actions:", sum(self.selected_actions.values()))
         #     print("Average reward per action:", self.episode_reward / sum(self.selected_actions.values()))
         # print(self.env.episodic_reward, self.env.nr_arrivals)
-        print(self.episode_reward, self.env.episodic_reward)
+        print('------------------------------------------')
+        print('Episode over')
+        print('Episode reward:', self.episode_reward)
+        print('Number of cases:', self.env.total_arrivals)
+        print('Completed cases:', len(self.env.cycle_times))
+        print('Uncompleted cases:', self.env.total_arrivals - len(self.env.cycle_times))
+        print('Average cycle time:', np.mean(list(self.env.cycle_times.values())))
+        print('------------------------------------------')
+        print('\n')
+
         self.env.reset()
         
         self.episode_reward = 0

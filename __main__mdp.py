@@ -1,9 +1,9 @@
-import mdp
+import mdp, smdp
 import rollouts
 import policy_learner
 import sys, os, re
-from collections import Counter
 import numpy as np
+import itertools
 
 def learn(config_type, 
           bootstrap_policy, 
@@ -19,30 +19,37 @@ def learn(config_type,
     env = mdp.MDP(episode_length, config_type, tau)
     
     pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
+    pl.cache = fill_cache(env, pl)
     extension = '.keras' if model_type == 'neural_network' else '.xgb.json'
     pl.save(filename_without_extension + config_type + ".v1" + extension)
 
-    best_policy = pl   
-    best_policy_reward = np.mean(rollouts.evaluate_policy(env, best_policy.policy, nr_rollouts=100, nr_arrivals=2500))
+    best_policy = pl
+    evaluation_env = smdp.SMDP(episode_length, config_type)
+    print('Evaluating best policy..')
+    rewards, _ = rollouts.evaluate_policy(evaluation_env, best_policy.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+    best_policy_reward = np.mean(rewards)
     print('Reward of policy version 1:', best_policy_reward)
     best_policy_v = 1
 
     for i in range(1, learning_iterations+1):
         if i > 1:
             pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
-        print("Policy verion " + str(i) + " learned, now testing")
+        # print("Policy verion " + str(i) + " learned, now testing")
         # print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500))
         # print('Greedy policy:', rollouts.evaluate_policy(env, mdp.greedy_policy, nr_rollouts, nr_arrivals=2500))
         # print('FIFO policy:', rollouts.evaluate_policy(env, mdp.fifo_policy, nr_rollouts, nr_arrivals=2500))
         # print('Random policy:', rollouts.evaluate_policy(env, mdp.random_policy, nr_rollouts, nr_arrivals=2500))
         if i < learning_iterations:
             pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
+            pl.cache = fill_cache(env, pl)
             
             print('Evaluating new policy..')
-            new_policy_reward = np.mean(rollouts.evaluate_policy(env, pl.policy, nr_rollouts=100, nr_arrivals=2500))
+            evaluation_env = smdp.SMDP(episode_length, config_type, track_cycle_times=True)
+            rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+            new_policy_reward = np.mean(rewards)
             print('Reward of policy version', i+1, ':', new_policy_reward)
             print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i+1}: {new_policy_reward}.")
-            if new_policy_reward < best_policy_reward: # Higher reward is better (less negative)
+            if new_policy_reward < best_policy_reward: # Higher reward is better
                 print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
                 pl = best_policy
             else:
@@ -54,6 +61,50 @@ def learn(config_type,
 
     best_policy.save(filename_without_extension + config_type + ".best_policy" + extension)           
 
+
+def fill_cache(env, policy):
+    _, frequent_states, _ =  determine_state_space(env)
+    frequent_states = np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states])
+    probabilities = policy.model.predict(frequent_states)
+    cache = {tuple(state): _probabilities for state, _probabilities in zip(frequent_states, probabilities)}
+    return cache
+
+def determine_state_space(env, max_queue=50):
+    def check_feasible_observation(observation):
+        assert len(observation) == len(env.state_space), f"Observation ({len(observation)}) and state space ({len(env.state_space)}) length must match"
+
+        for resource in env.resources:
+            # Some features do not contain assigned_ features if they can only be assigned to one task
+            for state in env.state_space:
+                if f'assigned_{resource}' in state:
+                    assert sum([1 for i, x in enumerate(observation) if x == 1 and resource in env.state_space[i]]) == 1
+
+        # All values should be positive
+        assert all([x >= 0 for x in observation])
+
+        # The values not related to the queue should be 0 or 1
+        for i, x in enumerate(observation):
+            if 'waiting' not in env.state_space[i]:
+                assert x == 0 or x == 1
+
+    feature_ranges = []
+    for state_label in env.state_space:
+        if 'is_available_' in state_label:
+            feature_ranges.append(2)
+        elif 'assigned_' in state_label:
+            feature_ranges.append(2)
+        elif 'waiting_' in state_label:
+            feature_ranges.append(max_queue + 1)
+    all_states = [list(state) for state in itertools.product(*[range(i) for i in feature_ranges])]
+
+    state_space = []
+    for observation in all_states:
+        try:
+            check_feasible_observation(observation)
+            state_space.append(observation)                
+        except AssertionError:
+            continue
+    return feature_ranges, state_space, all_states
 
 def show_policy(filename):
     pl = policy_learner.PolicyLearner.load(filename)
@@ -68,7 +119,6 @@ def show_policy(filename):
         observation = (0, 1, 1, 0, waiting)
         print(observation, pl.predict(observation, [False, True, True, False]))
     
-
 def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, model_type=None):
     env = mdp.MDP(episode_length, config_type, tau=0.25)
     pl = policy_learner.PolicyLearner.load(filename, model_type)
@@ -172,21 +222,23 @@ def main():
         'single_activity': 1.0042253394472318
     }
 
-    average_step_time_smdp = {
-        'slow_server': 0.595041322,
-        'low_utilization': 0.518518519,
-        'high_utilization': 0.620689655,
-        'n_system': 0.75,
-        'parallel': 0.571428571,
-        'down_stream': 0.571428571,
-        'single_activity': 0.865384615
+    minimium_transition_time = {
+        'slow_server': 1 / (1/2.0 + 1/1.4 + 1/1.8),
+        'low_utilization': 1 / (1/2.0 + 1/1.4 + 1/1.4),
+        'high_utilization': 1 / (1/2.0 + 1/1.8 + 1/1.8),
+        'n_system': 1 / (1/2.0 + 1/2.0 + 1/3),
+        'parallel': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+        'down_stream': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+        'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
     }
 
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'n_system'
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
     model_type = 'neural_network'#sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
     learning_iterations = 10
-    nr_steps_per_rollout = 50
-    tau = average_step_time_smdp[config_type] * 0.5
+    nr_rollouts = 100 #int(sys.argv[1]) if len(sys.argv) > 1 else 100
+    nr_steps_per_rollout = 50 #int(sys.argv[2]) if len(sys.argv) > 2 else 50
+    tau_multiplier = 1.0 #float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
+    tau = minimium_transition_time[config_type] * tau_multiplier
     mdp_steps = int(nr_steps_per_rollout * average_step_time_smdp[config_type] / tau)
 
     dir = f".//models//pi//mdp//{config_type}//"
@@ -194,21 +246,21 @@ def main():
         os.makedirs(dir, exist_ok=True)
 
     print('Learning MDP policy for', config_type, 'with', model_type, 'model.', flush=True)
-    print('Tau:', tau, flush=True)
-    print('Rollout length:', mdp_steps, flush=True)
+    print('Tau:', tau, f'(multiplier = {tau_multiplier})', flush=True)
+    print('Nr rollouts:', nr_rollouts, flush=True)
+    print('Rollout length:', mdp_steps, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
 
     learn(config_type, 
-        mdp.random_policy,
+        mdp.greedy_policy,
         dir,
         learning_iterations=learning_iterations,
         episode_length=2500, # nr_cases
-        nr_states_to_explore=5000,
-        nr_rollouts=100,
+        nr_states_to_explore=200,
+        nr_rollouts=nr_rollouts,
         nr_steps_per_rollout=mdp_steps,
         model_type=model_type,
         tau=tau)
     
-
     """
     Evaluation of the learned policies
     """

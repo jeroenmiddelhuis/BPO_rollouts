@@ -457,9 +457,9 @@ def fifo_policy(env):
                 possible_double_assignments_case = []
                 for task2 in tasks_of_case_id:
                     if task2 != selected_task:
-                        test = [double_assignment for double_assignment in possible_double_assignments if task2 in double_assignment[0] or task2 in double_assignment[1]]
-                        #print('Additional double assignmetns:', test)
-                        possible_double_assignments_case += test#[double_assignment for double_assignment in possible_double_assignments if (task2 in action[0] or task2 in action[1]) and task2 != selected_task]
+                        possible_double_assignments_case += [double_assignment 
+                                                             for double_assignment in possible_double_assignments 
+                                                             if task2 in double_assignment[0] or task2 in double_assignment[1]]
                 if len(possible_double_assignments_case) > 0:
                     assignment = random.choice(possible_double_assignments_case)
                     #print('returned assignment', assignment, '\n')

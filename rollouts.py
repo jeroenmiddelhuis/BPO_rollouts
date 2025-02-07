@@ -17,8 +17,11 @@ def rollout(env, policy, nr_steps_per_rollout=np.inf):
     done = False
     total_reward = 0
     nr_steps = 0
+    actions = {action:0 for action in env.action_space}
     while not done:
         action = policy(env)
+        action_name = env.action_space[np.argmax(action)]
+        actions[action_name] += 1
         _, reward, done, _, _ = env.step(action)
         nr_steps += 1
         total_reward += reward
@@ -65,14 +68,14 @@ def multiple_rollouts_per_action(env, policy, nr_rollouts_per_action, nr_steps_p
     possible_actions = [tuple([0]*i + [1] + [0]*(len(action_mask)-i-1)) for i in range(len(action_mask)) if action_mask[i]]
 
     rewards = {action: [] for action in possible_actions}
-    crn = CRN()
+    #crn = CRN()
     for _ in range(nr_rollouts_per_action):
-        crn.reset()  # we reset the common random numbers generator for each rollout.
+        #crn.reset()  # we reset the common random numbers generator for each rollout.
         for action in possible_actions:
-            crn.restart_sequence()  # but for each action we use the same random numbers, so the rollouts differ because of the actions, not because of randomness.
+            #crn.restart_sequence()  # but for each action we use the same random numbers, so the rollouts differ because of the actions, not because of randomness.
             env.set_state(state)
             # step the action and get the reward
-            _, reward, _, _, _ = env.step(action)
+            _, reward, _, _, _ = env.step(list(action))
             rewards[action].append(rollout(env, policy, nr_steps_per_rollout - 1) + reward)
     return observation, possible_actions, rewards
 
@@ -100,7 +103,7 @@ def find_learning_sample(env, policy, nr_rollouts_per_action, nr_steps_per_rollo
                 better_than_others = False
                 break
     if better_than_others:
-        return (observation, best_action)
+        return (observation, list(best_action))
     else:
         return None
 
@@ -138,7 +141,8 @@ def random_states(env, policy, nr_states):
         if sum(env.action_mask()) > 1:
             # Add more case arrivals to the state by setting rollout_length
             # Since we use a fixed number of steps per rollout, we set the rollout_length to a high number.
-            sampled_states.append(env.get_state(rollout_length=100))
+            # This ensure we can simulate for an infitie horizon.
+            sampled_states.append(env.get_state(rollout_length=500))
     return sampled_states
 
 def process_state(args):
@@ -179,12 +183,13 @@ def learn_iteration(env,
     # 2. Process states in parallel
     env_type = "smdp" if isinstance(env, smdp.SMDP) else "mdp"
     print('Environment type:', env_type)
+    # We use the policy to do the rollouts
     args = [(state, env_type, env.nr_arrivals, env.config_type, 
              getattr(env, 'tau', None), policy, nr_rollouts_per_action_per_state,
              nr_steps_per_rollout, only_statistically_significant) for state in states]
 
     with Pool() as pool:
-        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=False))
+        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=True))
     
     # 3. Collect results
     learning_samples_X = []
@@ -207,35 +212,38 @@ def learn_iteration(env,
     return learner
 
 
-def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, ppo=False):
+def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=False):
     """
     Evaluates the policy by doing a number of rollouts and averaging the rewards.
     """
-    if ppo:
-        total_reward = []
+    if not parallel:
+        total_rewards = []
         for i in range(nr_rollouts):
             env.reset()
             if nr_arrivals is not None:
                 env.nr_arrivals = nr_arrivals
-            total_reward.append(rollout(env, policy))
-        return total_reward
+            total_rewards.append(rollout(env, policy))
+        return total_rewards
     else:
         if nr_arrivals is None:
             nr_arrivals = env.nr_arrivals
             
         with Pool() as pool:
-            total_rewards = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=False))
-        return total_rewards
+            result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=False))
+            total_rewards, mean_cycle_times = zip(*result)
+        return total_rewards, mean_cycle_times
 
 
 def evaluate_policy_single_rollout(args):
     env, policy, nr_arrivals = args
     if env.env_type == "smdp":
-        env_copy = smdp.SMDP(nr_arrivals, env.config_type)
+        env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
     elif env.env_type == "mdp":
-        env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau)
+        env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
     else:
         raise ValueError("Unknown environment type.")
 
-    env_copy.reset()    
-    return rollout(env_copy, policy)
+    env_copy.reset()
+    total_reward = rollout(env_copy, policy)
+    mean_cycle_time = np.mean(list(env_copy.cycle_times.values()))
+    return total_reward, mean_cycle_time

@@ -85,7 +85,6 @@ class ValueIteration:
             nr_cases = observation[state_space_labels.index(f'waiting_{task_type}')]
             already_waiting_cases = sum([len(waiting_cases[task_type]) for task_type in self.env.task_types])
             waiting_cases[task_type] = [i + already_waiting_cases for i in range(nr_cases)]
-
         # Set processing resources
         for resource in self.env.resources:
             # The resource is available
@@ -101,8 +100,8 @@ class ValueIteration:
             else: # No assigned resource variable, so we need to check which task is assigned
                 for task_type in self.env.task_types:
                     resource_pool = self.env.resource_pools[task_type]
-                    # Check if the resource is in the resource pool and if it is the only resource processing the task
-                    if resource in resource_pool and sum([resource not in self.env.resource_pools[task_type2] for task_type2 in self.env.task_types if task_type2 != task_type]) == 0:
+                    # Check if the resource is in the resource pool and if it is the only resource processing the task                    
+                    if resource in resource_pool and sum([resource in self.env.resource_pools[task_type2] for task_type2 in self.env.task_types if task_type2 != task_type]) == 0:
                         processing_resources.append([(sum([len(waiting_cases[task_type]) for task_type in self.env.task_types]) 
                                                       + sum([len(processing_resource) for processing_resource in processing_resources]), 
                                                       task_type)])
@@ -193,12 +192,18 @@ class ValueIteration:
         delta_delta = np.inf
 
         iteration = 0
-        delta = 0
+        #delta = 0
+        max_delta = -np.inf
+        min_delta = np.inf
         done = False
         while not done:
-            print(f'Iteration {iteration} with delta {delta} and delta_delta {delta_delta}')
-            
+            #print(f'Iteration {iteration} with delta {delta} and delta_delta {delta_delta}')
+            print(f'Iteration {iteration} for {self.config_type}')
+            print(f'Max_delta {np.round(max_delta, 2)} and min_delta {np.round(min_delta,2)}')
+            print(f'Difference: {np.round(max_delta - min_delta, 10)}')
             delta = 0
+            max_delta = -np.inf
+            min_delta = np.inf
             for s in tqdm(self.state_space, total=len(self.state_space), disable=False):
                 self.set_state_from_observation(self.env, s)
                 action_mask = self.env.action_mask()
@@ -257,20 +262,25 @@ class ValueIteration:
                 old_value = v[self.observation_to_index(s)]
                 new_value = max([q[self.observation_to_index(s), i] for i, mask in enumerate(action_mask) if mask == 1])
                 delta = max(delta, abs(new_value - old_value))
+                max_delta = max(max_delta, abs(new_value - old_value))
+                min_delta = min(min_delta, abs(new_value - old_value))
+                #print(min_delta, max_delta)
 
                 v[self.observation_to_index(s)] = new_value
                 policy[self.observation_to_index(s)] = np.argmax([q[self.observation_to_index(s), i] if mask == 1 else -np.inf for i, mask in enumerate(action_mask)])
                 
-            delta_delta = abs(old_delta - delta)
-            old_delta = delta
+            # delta_delta = abs(old_delta - delta)
+            # old_delta = delta
             iteration += 1
             if max_iterations != 0:
                 if iteration == max_iterations:
                     done = True
             else:
                 if self.gamma == 1:
-                    if delta_delta < self.theta:
+                    if max_delta - min_delta < self.theta:
                         done = True
+                    # if delta_delta < self.theta:
+                    #     done = True
                 elif delta < self.theta:
                     done = True
 
@@ -287,8 +297,22 @@ def main():
     'single_activity': 1.0042253394472318,
     'composite': 0.1699383116459651,
     }
-    for config in ['composite']:	
-        tau = average_step_time_smdp[config] / 2
+
+    minimium_transition_time = {
+        'slow_server': 1 / (1/2.0 + 1/1.4 + 1/1.8),
+        'low_utilization': 1 / (1/2.0 + 1/1.4 + 1/1.4),
+        'high_utilization': 1 / (1/2.0 + 1/1.8 + 1/1.8),
+        'n_system': 1 / (1/2.0 + 1/2.0 + 1/3),
+        'parallel': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+        'down_stream': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+        'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
+    }
+
+    tau_multiplier = 1.0
+
+    for config in ['n_system']:
+    #for config in ['high_utilization', 'parallel', 'down_stream']:    
+        tau = minimium_transition_time[config] * tau_multiplier
         if config == 'composite':
             env = mdp_composite.MDP_composite(2500, config, tau)
         else:
@@ -297,12 +321,11 @@ def main():
         gamma = 1
         theta = 0.001
         vi = ValueIteration(env, gamma=gamma,theta=theta)
-        # q, v, policy = vi.value_iteration()
-        # directory = 'models/vi'
-        # if not os.path.exists(directory):
-        #     os.makedirs(directory)
-        # np.save(f'{directory}/{config}_test.npy', policy)
-
+        q, v, policy = vi.value_iteration()
+        directory = 'models/vi'
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        np.save(f'{directory}/{config}.npy', policy)
 
     """
         Observation examples:

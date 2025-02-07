@@ -8,7 +8,7 @@ from sb3_contrib import MaskablePPO
 
 class PolicyLearner:
     
-    CACHE_SIZE = 100000
+    CACHE_SIZE = 50000
 
     def __init__(self):
         self.model = None
@@ -17,7 +17,6 @@ class PolicyLearner:
         self.cache_misses = 0
         self.cache_evictions = 0
         self.model_type = None
-
 
     def build_model(self, observations, actions, model_type='neural_network'):
         # Convert observations to numpy array and normalize each observation
@@ -29,8 +28,8 @@ class PolicyLearner:
             output_dim = len(actions[0])
 
             inputs = tf.keras.Input(shape=(input_dim,))
-            x = tf.keras.layers.Dense(64, activation='relu')(inputs)
-            x = tf.keras.layers.Dense(64, activation='relu')(x)
+            x = tf.keras.layers.Dense(128, activation='relu')(inputs)
+            x = tf.keras.layers.Dense(128, activation='relu')(x)
             outputs = tf.keras.layers.Dense(output_dim, activation='softmax')(x)
 
             self.model = tf.keras.Model(inputs=inputs, outputs=outputs)
@@ -70,10 +69,12 @@ class PolicyLearner:
             self.model = xgb.train(params, dtrain, xgb_model=self.model.get_booster())
     
     def normalize_observation(self, observation):
-        if len(observation) == 5: # single_activity
+        if len(observation) == 3: # single_activity
             observation[-1] = np.minimum(1.0, observation[-1] / 100.0)
-        else: # Other 2 activity scenarios
+        elif len(observation) <= 8: # 2 activity scenarios
             observation[-2:] = np.minimum(1.0, observation[-2:] / 100.0)
+        else: # composite model
+            observation[-12:] = np.minimum(1.0, observation[-12:] / 100.0)
         return observation
 
     def predict(self, observation, action_mask):
@@ -97,9 +98,10 @@ class PolicyLearner:
         If the cache is full, it removes the oldest entry.
         """
         observation_tuple = tuple(observation[0])
-        if observation_tuple in self.cache:
+        cached_value = self.cache.get(observation_tuple)
+        if cached_value is not None:
             self.cache_hits += 1
-            return self.cache[observation_tuple]
+            return cached_value
 
         if isinstance(self.model, tf.keras.Model):
             action_probs = self.model(observation)[0]

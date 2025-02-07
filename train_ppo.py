@@ -31,9 +31,11 @@ n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
 config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
-env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
-test_mode = sys.argv[3] if len(sys.argv) > 3 else False
-reward_function = sys.argv[4] if len(sys.argv) > 4 else 'inverse_case_cycle_time'
+env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
+reward_function = sys.argv[3] if len(sys.argv) > 3 else 'AUC'
+is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else True
+
+test_mode = False
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -42,8 +44,8 @@ class CustomPolicy(MaskableActorCriticPolicy):
         super(CustomPolicy, self).__init__(*args, **kwargs,
                                            net_arch=net_arch)
 
-def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, env_type='smdp'):
-    env = smdp.SMDP(episode_length, config_type)
+def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, is_stopping_criteria_time=False):
+    env = smdp.SMDP(episode_length, config_type, is_stopping_critera_time=is_stopping_criteria_time)
     pl = policy_learner.PolicyLearner.load(filename)
 
     rewards = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, ppo=True)
@@ -69,17 +71,36 @@ if __name__ == '__main__':
             'slow_server': 0.6700290812922858,
             'low_utilization': 0.6667579762550317,
             'high_utilization': 0.6695359811479276,
-            'n_system': 1.0014597219587165,
+            'n_system': 1.0013236383088864,
             'parallel': 0.6680392125284501,
             'down_stream': 0.6681612256898539,
             'single_activity': 1.0042253394472318
         }
-        tau = average_step_time_smdp[config_type] / 2
+
+        minimium_transition_time = {
+            'slow_server': 1 / (1/2.0 + 1/1.4 + 1/1.8),
+            'low_utilization': 1 / (1/2.0 + 1/1.4 + 1/1.4),
+            'high_utilization': 1 / (1/2.0 + 1/1.8 + 1/1.8),
+            'n_system': 1 / (1/2.0 + 1/2.0 + 1/3),
+            'parallel': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+            'down_stream': 1 / (1/2.0 + 1/1.6 + 1/1.6),
+            'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
+        }
+
+        tau_multiplier = 0.5
+        tau = minimium_transition_time[config_type] * tau_multiplier
 
         if env_type == 'mdp':
-            env = mdp.MDP(2500, config_type, tau, reward_function=reward_function)
+            env = mdp.MDP(2500, config_type, 
+                          tau, 
+                          reward_function=reward_function,
+                          track_cycle_times=True,
+                          is_stopping_criteria_time=is_stopping_criteria_time)
         elif env_type == 'smdp':
-            env = smdp.SMDP(2500, config_type, reward_function=reward_function)
+            env = smdp.SMDP(2500, config_type, 
+                            reward_function=reward_function, 
+                            track_cycle_times=True,
+                            is_stopping_criteria_time=is_stopping_criteria_time)
 
         print(f'Training agent for {config_type} with {time_steps} timesteps and reward function {reward_function} in updates of {n_steps} steps.')
         
@@ -91,7 +112,7 @@ if __name__ == '__main__':
         if reward_function == 'inverse_case_cycle_time':
             gamma = 0.999
         else:
-            gamma = 1
+            gamma = 0.99
             
         # Create the model
         model = MaskablePPO(CustomPolicy, 
@@ -109,17 +130,18 @@ if __name__ == '__main__':
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
         # Evaluation environment
-        if env_type == 'mdp':
-            eval_env = mdp.MDP(2500, config_type, tau)
-        elif env_type == 'smdp':
-            eval_env = smdp.SMDP(2500, config_type)
-            
+        # We evalute the model on the SMDP
+        eval_env = smdp.SMDP(2500, config_type, 
+                        reward_function=reward_function, 
+                        track_cycle_times=True,
+                        is_stopping_criteria_time=is_stopping_criteria_time)
+        
         gym_env_eval = Environment(eval_env)  # Initialize env
         gym_env_eval = Monitor(gym_env_eval, log_dir)
         eval_callback = EvalPolicyCallback(check_freq=10*int(n_steps), nr_evaluations=10, log_dir=log_dir, eval_env=gym_env_eval)
         best_reward_callback = SaveOnBestTrainingRewardCallback(check_freq=int(n_steps), log_dir=log_dir)
 
-        model.learn(total_timesteps=int(time_steps), callback=eval_callback)#
+        model.learn(total_timesteps=int(time_steps))#, callback=eval_callback)#
 
         # For episode rewards, use env.get_episode_rewards()®
         # env.get_episode_times() returns the wall clock time in seconds of each episode (since start)

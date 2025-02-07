@@ -4,7 +4,7 @@ import numpy as np
 import random
 
 class MDP:
-    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None, reward_function='AUC'):
+    def __init__(self, nr_arrivals, config_type='single_activity', tau=0.5, reporter=None, reward_function='AUC', track_cycle_times=False, is_stopping_criteria_time=False):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -19,6 +19,8 @@ class MDP:
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
+        self.track_cycle_times = track_cycle_times
+        self.is_stopping_criteria_time = is_stopping_criteria_time
         self.env_type = 'mdp'
 
         with open(os.path.join(sys.path[0], "config.txt"), "r") as f:
@@ -73,18 +75,21 @@ class MDP:
 
         self.total_time = 0
         self.total_arrivals = 0
+        if self.is_stopping_criteria_time:
+            nr_arrivals = nr_arrivals * 2 # To ensure that the simulation runs for a longer time
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
         self.tau = tau
         self.locked_action = None
-        self.arrival_times = {}
-        self.cycle_times = {}
         self.episodic_reward = 0
+        if self.track_cycle_times:
+            self.arrival_times = {}
+            self.cycle_times = {}
 
-        self.processing_starts = {}
-        self.processing_times = {}
-        self.waiting_starts = {}
-        self.waiting_times = {}
+            self.processing_starts = {}
+            self.processing_times = {}
+            self.waiting_starts = {}
+            self.waiting_times = {}
 
         self.reporter = reporter
 
@@ -177,13 +182,14 @@ class MDP:
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
         self.locked_action = None
-        self.arrival_times = {}
-        self.cycle_times = {}
+        if self.track_cycle_times:
+            self.arrival_times = {}
+            self.cycle_times = {}
 
-        self.processing_starts = {}
-        self.processing_times = {}
-        self.waiting_starts = {}
-        self.waiting_times = {}
+            self.processing_starts = {}
+            self.processing_times = {}
+            self.waiting_starts = {}
+            self.waiting_times = {}
         self.episodic_reward = 0
     
     def get_state(self, rollout_length=None):
@@ -271,8 +277,7 @@ class MDP:
     def get_transformed_evolutions(self, processing_resources, arrivals_coming, action=None):
         evolutions, evolution_rates = self.get_evolutions(processing_resources, arrivals_coming, action)
         sum_of_rates = sum(evolution_rates.values())
-        if sum_of_rates == 0:
-            print(evolutions, evolution_rates, self.is_done(), self.arrivals_coming(), action, env.action_mask())
+        #if sum_of_rates == 0:
         expected_next_event_time = 1 / sum_of_rates
         transformed_evolutions = {evolution: self.tau / expected_next_event_time * p 
                                   for evolution, p in evolutions.items()}
@@ -286,15 +291,19 @@ class MDP:
         """
         The simulation is done if we have reached the maximum number of arrivals and there are no more tasks to process.
         """
-        return (not self.arrivals_coming() 
-                and sum(len(v) for v in self.waiting_cases.values()) == 0 
-                and len(self.processing_r1) == 0 and len(self.processing_r2) == 0)
+        if self.is_stopping_criteria_time:
+            return self.total_time > 5000
+        else:
+            return (not self.arrivals_coming() 
+                    and sum(len(v) for v in self.waiting_cases.values()) == 0 
+                    and len(self.processing_r1) == 0 and len(self.processing_r2) == 0)
 
     def get_processing_resources(self):
         return [getattr(self, f'processing_r{i}') for i in range(1, len(self.resources)+1)]
 
     def step(self, action):
         # We save the action so we can lock it if we return to the same state
+        # The locking is done in the action mask function
         original_action = action
         reward = 0
         # The action is passed as a binary list (neural network). We need to convert it to the action name
@@ -302,6 +311,8 @@ class MDP:
         if isinstance(action, list):
             action_index = action.index(1)
             action = self.action_space[action_index]
+        if self.locked_action == 'do_nothing':
+            self.locked_action = None
         # Determine the evolution based on the current state and action
         transformed_evolutions, _ = self.get_transformed_evolutions(self.get_processing_resources(), self.arrivals_coming(), action)
         
@@ -314,7 +325,6 @@ class MDP:
                 unique_active_cases.update(self.waiting_cases[task])
 
             reward += -len(unique_active_cases) * self.tau # Not needed to multiply by constant tau but kept for consistency with SMDP
-
         events, probs = zip(*list(transformed_evolutions.items()))
         evolution = np.random.choice(events, p=probs)
         
@@ -322,7 +332,6 @@ class MDP:
         if evolution != 'return_to_state':
             next_task = None
             self.locked_action = None
-            #print('Action unlocked', self.locked_action)
             # process the action, 'postpone' and 'do nothing', do nothing to the state.
             if action not in ['postpone', 'do_nothing']:       
                 if isinstance(action, str):
@@ -333,7 +342,8 @@ class MDP:
                     resource, task = action[0:-1], action[-1]
                     if self.waiting_cases[task]:
                         case_id = self.waiting_cases[task].pop(0)
-                        self.processing_starts[case_id][(task, resource)] = self.total_time
+                        if self.track_cycle_times: 
+                            self.processing_starts[case_id][(task, resource)] = self.total_time
                         getattr(self, f'processing_{resource}').append((case_id, task))
                         if self.reporter:
                             self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
@@ -344,17 +354,19 @@ class MDP:
             self.total_time += self.tau
 
             if evolution == 'arrival':
-                self.arrival_times[self.total_arrivals] = self.total_time
+                if self.track_cycle_times:
+                    self.arrival_times[self.total_arrivals] = self.total_time
 
-                self.waiting_starts[self.total_arrivals] = {}
-                self.processing_starts[self.total_arrivals] = {}
-                self.waiting_times[self.total_arrivals] = {}
-                self.processing_times[self.total_arrivals] = {}
+                    self.waiting_starts[self.total_arrivals] = {}
+                    self.processing_starts[self.total_arrivals] = {}
+                    self.waiting_times[self.total_arrivals] = {}
+                    self.processing_times[self.total_arrivals] = {}
 
                 # sample the first task from the transition matrix
                 next_tasks = self.sample_next_task('Start')
                 for task in next_tasks:
-                    self.waiting_starts[self.total_arrivals][task] = self.total_time
+                    if self.track_cycle_times: 
+                        self.waiting_starts[self.total_arrivals][task] = self.total_time
                     self.waiting_cases[task].append(self.total_arrivals)
                 if self.reporter is not None:
                     self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
@@ -362,18 +374,21 @@ class MDP:
             else:
                 resource, task = evolution[0:-1], evolution[-1]                
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]
-                self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
-                self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)] 
+                if self.track_cycle_times: 
+                    self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
+                    self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)] 
                 next_tasks = self.sample_next_task(task, case_id)
                 self.partially_completed_cases.append(case_id)
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:
                     if next_task and next_task != 'Complete':
-                        self.waiting_starts[case_id][next_task] = self.total_time
+                        if self.track_cycle_times:
+                            self.waiting_starts[case_id][next_task] = self.total_time
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
-                        self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]                      
+                        if self.track_cycle_times:
+                            self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]                      
                         if self.reward_function == 'case_cycle_time':                            
                             reward += -self.cycle_times[case_id]
                         elif self.reward_function == 'inverse_case_cycle_time':
@@ -389,18 +404,20 @@ class MDP:
             return self.observation(), reward, self.is_done(), False, None
 
 def random_policy(env):
-    action_mask = env.action_mask()
-    action = [0] * len(action_mask)
-    choices = [i for i in range(len(action_mask)) if action_mask[i] and env.action_space[i] not in ['postpone', 'do_nothing']]
-    if len(choices) == 0:
-        possible_action = 'postpone' if action_mask[env.action_space.index('postpone')] else 'do_nothing'
-        action_index = env.action_space.index(possible_action)
-        action[action_index] = 1
-        return action
+    action_mask = env.action_mask()  
+    if sum(action_mask) == 1:
+        return env.action_space[action_mask.index(1)]
+    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
+    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
+    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
+
+    assignment = random.choice(assignments)
+    possible_double_asignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
+
+    if len(possible_double_asignments) > 0:
+        return tuple(random.choice(possible_double_asignments))
     else:
-        action_index = np.random.choice(choices)
-        action[action_index] = 1
-        return action
+        return assignment
 
 def totally_random_policy(env):
     """
@@ -509,15 +526,13 @@ def fifo_policy(env):
                 possible_double_assignments_case = []
                 for task2 in tasks_of_case_id:
                     if task2 != selected_task:
-                        test = [double_assignment for double_assignment in possible_double_assignments if task2 in double_assignment[0] or task2 in double_assignment[1]]
-                        #print('Additional double assignmetns:', test)
-                        possible_double_assignments_case += test#[double_assignment for double_assignment in possible_double_assignments if (task2 in action[0] or task2 in action[1]) and task2 != selected_task]
+                        possible_double_assignments_case += [double_assignment 
+                                                             for double_assignment in possible_double_assignments 
+                                                             if task2 in double_assignment[0] or task2 in double_assignment[1]]
                 if len(possible_double_assignments_case) > 0:
                     assignment = random.choice(possible_double_assignments_case)
-                    #print('returned assignment', assignment, '\n')
                     return tuple(assignment)
         else:
-            #print('returned assignment', assignment, '\n')
             return assignment
 
 def random_policy(env):
@@ -557,14 +572,14 @@ if __name__ == '__main__':
     for _ in range(nr_replications):
         #reporter = EventLogReporter("mdp_log_0.5.txt")
         reporter = ProcessReporter()
-        tau = 0.25
-        env = MDP(2500, tau=tau, reporter=reporter, config_type='slow_server')
+        tau = 1 / (1/2.0 + 1/1.4 + 1/1.8)
+        env = MDP(5000, tau=tau, reporter=reporter, config_type='slow_server')
 
         done = False
         steps = 0
         total_reward = 0
         while not done:
-            action = greedy_policy(env)            
+            action = fifo_policy(env)            
             state, reward, done, _, _ = env.step(action)
             total_reward += reward
             time = env.total_time
@@ -577,7 +592,7 @@ if __name__ == '__main__':
             for resource in env.resource_pools[task_type]:
                 print(f'Mean processing time for task {task_type} with resource {resource}: {np.mean([env.processing_times[case_id][(task_type, resource)] for case_id in env.processing_times if (task_type, resource) in env.processing_times[case_id]])}')
         reporter.close()
-        reporter.print_result()     
+        reporter.print_result()
         print('\n')
 
     # print mean and 95% confidence interval of the average cycle time
