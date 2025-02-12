@@ -1,9 +1,13 @@
 import mdp, smdp
 import rollouts
 import policy_learner
-import sys, os, re
+import sys, re
 import numpy as np
 import itertools
+import os
+from crn import CRN
+import torch
+from heuristic_policies import fifo_policy, random_policy, greedy_policy, threshold_policy
 
 def learn(config_type, 
           bootstrap_policy, 
@@ -16,60 +20,52 @@ def learn(config_type,
           model_type = 'neural_network', 
           only_statistically_significant=False,
           tau=0.5):
-    env = mdp.MDP(episode_length, config_type, tau)
     
+    env = mdp.MDP(episode_length, config_type, tau=tau, crn=CRN(), track_cycle_times=False)    
     pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
     pl.cache = fill_cache(env, pl)
-    extension = '.keras' if model_type == 'neural_network' else '.xgb.json'
+    extension = '.pth'
     pl.save(filename_without_extension + config_type + ".v1" + extension)
 
-    best_policy = pl
+    best_pl = pl.copy() # Copy the best policy so far
     evaluation_env = smdp.SMDP(episode_length, config_type)
-    print('Evaluating best policy..')
-    rewards, _ = rollouts.evaluate_policy(evaluation_env, best_policy.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+    print('Evaluating policy..')
+    rewards, _ = rollouts.evaluate_policy(evaluation_env, best_pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=True)
     best_policy_reward = np.mean(rewards)
     print('Reward of policy version 1:', best_policy_reward)
     best_policy_v = 1
+    print('\n')
+    for i in range(2, learning_iterations+1):        
+        pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
+        pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
+        pl.cache = fill_cache(env, pl)
+        
+        print(f'Evaluating new policy {i}..')
+        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=True)
+        new_policy_reward = np.mean(rewards)
+        print('Reward of policy version', i, ':', new_policy_reward)
+        print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i}: {new_policy_reward}.")
+        if new_policy_reward < best_policy_reward: # New policy is not better than the previous policy
+            print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
+            # pl = best_pl.copy() # Revert to the previous policy
+        else:
+            print(f"Policy version {best_policy_v} improved, continuing with policy version {i}.")
+            best_pl = pl.copy()
+            best_policy_reward = new_policy_reward
+            best_policy_v = i
+        print('\n')
 
-    for i in range(1, learning_iterations+1):
-        if i > 1:
-            pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
-        # print("Policy verion " + str(i) + " learned, now testing")
-        # print('Trained policy:', rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500))
-        # print('Greedy policy:', rollouts.evaluate_policy(env, mdp.greedy_policy, nr_rollouts, nr_arrivals=2500))
-        # print('FIFO policy:', rollouts.evaluate_policy(env, mdp.fifo_policy, nr_rollouts, nr_arrivals=2500))
-        # print('Random policy:', rollouts.evaluate_policy(env, mdp.random_policy, nr_rollouts, nr_arrivals=2500))
-        if i < learning_iterations:
-            pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
-            pl.cache = fill_cache(env, pl)
-            
-            print('Evaluating new policy..')
-            evaluation_env = smdp.SMDP(episode_length, config_type, track_cycle_times=True)
-            rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
-            new_policy_reward = np.mean(rewards)
-            print('Reward of policy version', i+1, ':', new_policy_reward)
-            print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i+1}: {new_policy_reward}.")
-            if new_policy_reward < best_policy_reward: # Higher reward is better
-                print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
-                pl = best_policy
-            else:
-                print(f"Policy version {best_policy_v} improved, continuing with policy version {i + 1}.")
-                best_policy = pl
-                best_policy_reward = new_policy_reward
-                best_policy_v = i + 1
-            print('\n')
-
-    best_policy.save(filename_without_extension + config_type + ".best_policy" + extension)           
+    best_pl.save(filename_without_extension + config_type + ".best_policy" + extension)           
 
 
 def fill_cache(env, policy):
     _, frequent_states, _ =  determine_state_space(env)
-    frequent_states = np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states])
-    probabilities = policy.model.predict(frequent_states)
-    cache = {tuple(state): _probabilities for state, _probabilities in zip(frequent_states, probabilities)}
+    frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
+    probabilities = policy.model(frequent_states).detach()
+    cache = {tuple(state.detach().numpy()): _probabilities.detach().numpy() for state, _probabilities in zip(frequent_states, probabilities)}
     return cache
 
-def determine_state_space(env, max_queue=50):
+def determine_state_space(env, max_queue=30):
     def check_feasible_observation(observation):
         assert len(observation) == len(env.state_space), f"Observation ({len(observation)}) and state space ({len(env.state_space)}) length must match"
 
@@ -232,14 +228,15 @@ def main():
         'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
     }
 
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
-    model_type = 'neural_network'#sys.argv[2] if len(sys.argv) > 2 else 'neural_network'
+    nr_rollouts = 100
+    nr_steps_per_rollout = 50  
+    config_type = 'slow_server'#sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+    model_type = 'neural_network'
     learning_iterations = 10
-    nr_rollouts = 100 #int(sys.argv[1]) if len(sys.argv) > 1 else 100
-    nr_steps_per_rollout = 50 #int(sys.argv[2]) if len(sys.argv) > 2 else 50
-    tau_multiplier = 1.0 #float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
+
+    tau_multiplier = 1.0
     tau = minimium_transition_time[config_type] * tau_multiplier
-    mdp_steps = int(nr_steps_per_rollout * average_step_time_smdp[config_type] / tau)
+    mdp_steps = int(np.ceil((nr_steps_per_rollout * average_step_time_smdp[config_type] / tau)))
 
     dir = f".//models//pi//mdp//{config_type}//"
     if not os.path.exists(dir):
@@ -251,11 +248,11 @@ def main():
     print('Rollout length:', mdp_steps, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
 
     learn(config_type, 
-        mdp.greedy_policy,
+        greedy_policy,
         dir,
         learning_iterations=learning_iterations,
         episode_length=2500, # nr_cases
-        nr_states_to_explore=200,
+        nr_states_to_explore=50,
         nr_rollouts=nr_rollouts,
         nr_steps_per_rollout=mdp_steps,
         model_type=model_type,

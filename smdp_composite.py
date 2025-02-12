@@ -4,10 +4,17 @@ import numpy as np
 import random
 
 class SMDP_composite:
-    def __init__(self, nr_arrivals, config_type='composite', reporter=None, reward_function='AUC'):
+    def __init__(self, nr_arrivals, config_type='composite', 
+                 reporter=None, crn=None, reward_function='AUC', 
+                 track_cycle_times=True, is_stopping_criteria_time=False):
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
+        self.crn = crn
+        # Variable used to track the cycle times of the cases
+        # When setting the state, the cycle times cannot be tracked so we need to disable it then
+        self.track_cycle_times = track_cycle_times
+        self.is_stopping_criteria_time = is_stopping_criteria_time
         self.env_type = 'smdp'
 
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt"), "r") as f:
@@ -85,16 +92,19 @@ class SMDP_composite:
 
         self.total_time = 0
         self.total_arrivals = 0
+        if self.is_stopping_criteria_time:
+            nr_arrivals = nr_arrivals * 2 # To ensure that the simulation runs for a longer time
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
         self.episodic_reward = 0
-        self.arrival_times = {}
-        self.cycle_times = {}
+        if self.track_cycle_times:
+            self.arrival_times = {}
+            self.cycle_times = {}
 
-        self.processing_starts = {}
-        self.processing_times = {}
-        self.waiting_starts = {}
-        self.waiting_times = {}
+            self.processing_starts = {}
+            self.processing_times = {}
+            self.waiting_starts = {}
+            self.waiting_times = {}
 
         self.actions_taken = {}
         self.reporter = reporter
@@ -143,6 +153,8 @@ class SMDP_composite:
         return assignments_possible + double_assignments_possible + [postpone_possible, do_nothing_possible]
 
     def reset(self):
+        if self.crn:
+            self.crn.reset()
         self.waiting_cases = {task: [] for task in self.task_types}
         self.partially_completed_cases = []
 
@@ -162,13 +174,14 @@ class SMDP_composite:
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
-        self.arrival_times = {}
-        self.cycle_times = {}
+        if self.track_cycle_times:
+            self.arrival_times = {}
+            self.cycle_times = {}
 
-        self.processing_starts = {}
-        self.processing_times = {}
-        self.waiting_starts = {}
-        self.waiting_times = {}
+            self.processing_starts = {}
+            self.processing_times = {}
+            self.waiting_starts = {}
+            self.waiting_times = {}
         self.episodic_reward = 0
 
     def get_state(self, rollout_length=None):
@@ -209,7 +222,10 @@ class SMDP_composite:
             # Check if the sum is approximately 1 or less, considering rounding errors
             if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
                 # Draw a random sample using the crn class
-                return [np.random.choice(self.task_types_all, p=p_transitions)]
+                if self.crn:
+                    return [self.crn.choice(self.task_types_all, weights=p_transitions)]
+                else:
+                    return [np.random.choice(self.task_types_all, p=p_transitions)]
             else:
                 raise ValueError("The sum of the transition probabilities must be 1 or less.")
 
@@ -254,10 +270,13 @@ class SMDP_composite:
         """
         The simulation is done if we have reached the maximum number of arrivals and there are no more tasks to process.
         """
-        return (not self.arrivals_coming() 
-                and sum(len(v) for v in self.waiting_cases.values()) == 0
-                and sum(len(is_processing) for is_processing in self.get_processing_resources()) == 0)
-    
+        if self.is_stopping_criteria_time:
+            return self.total_time > 5000
+        else:
+            return (not self.arrivals_coming() 
+                    and sum(len(v) for v in self.waiting_cases.values()) == 0
+                    and sum(len(is_processing) for is_processing in self.get_processing_resources()) == 0)
+        
     def get_processing_resources(self):
         return [getattr(self, f'processing_r{i}') for i in range(1, len(self.resources)+1)]
 
@@ -278,8 +297,9 @@ class SMDP_composite:
                 resource, task = act[0:-1], act[-1]
                 if self.waiting_cases[task]:
                     case_id = self.waiting_cases[task].pop(0)
-                    self.processing_starts[case_id][(task, resource)] = self.total_time
-                    self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
+                    if self.track_cycle_times: 
+                        self.processing_starts[case_id][(task, resource)] = self.total_time
+                        self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
                     getattr(self, f'processing_{resource}').append((case_id, task))
                     if self.reporter:
                         self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
@@ -308,23 +328,32 @@ class SMDP_composite:
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
         else:
-            time = random.expovariate(sum_of_rates) # sample time from T~exp(sum_of_rates)
+            if self.crn:
+                time = self.crn.generate_exponential(sum_of_rates)
+            else:
+                time = random.expovariate(sum_of_rates)                
             self.total_time += time # time of next event
+
             events, probs = zip(*list(evolutions.items()))
-            evolution = np.random.choice(events, p=probs)
+            if self.crn:
+                evolution = self.crn.choice(events, w=probs)
+            else:
+                evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival': # arrival event
-                self.arrival_times[self.total_arrivals] = self.total_time
+                if self.track_cycle_times:
+                    self.arrival_times[self.total_arrivals] = self.total_time
 
-                self.waiting_starts[self.total_arrivals] = {}
-                self.processing_starts[self.total_arrivals] = {}
-                self.waiting_times[self.total_arrivals] = {}
-                self.processing_times[self.total_arrivals] = {}
+                    self.waiting_starts[self.total_arrivals] = {}
+                    self.processing_starts[self.total_arrivals] = {}
+                    self.waiting_times[self.total_arrivals] = {}
+                    self.processing_times[self.total_arrivals] = {}
 
                 # sample the first task from the transition matrix
                 next_tasks = self.sample_next_task('Start')
                 for task in next_tasks:
-                    self.waiting_starts[self.total_arrivals][task] = self.total_time
+                    if self.track_cycle_times:
+                        self.waiting_starts[self.total_arrivals][task] = self.total_time
                     self.waiting_cases[task].append(self.total_arrivals)
                 if self.reporter:
                     self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
@@ -332,7 +361,8 @@ class SMDP_composite:
             else: # task completion event
                 resource, task = evolution[0:-1], evolution[-1]
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]
-                self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)]
+                if self.track_cycle_times:
+                    self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)]
                 next_tasks = self.sample_next_task(task, case_id)
                 # completion the parallel task adds to list of partially completed cases
                 # if task i or j has been completed previously, the case may now continue
@@ -343,10 +373,12 @@ class SMDP_composite:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:                    
                     if next_task and next_task != 'Complete':
-                        self.waiting_starts[case_id][next_task] = self.total_time
+                        if self.track_cycle_times:
+                            self.waiting_starts[case_id][next_task] = self.total_time
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
-                        self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
+                        if self.track_cycle_times:
+                            self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
                         if self.reward_function == 'case_cycle_time':                            
                             reward += -self.cycle_times[case_id]
                         elif self.reward_function == 'inverse_case_cycle_time':
@@ -358,133 +390,8 @@ class SMDP_composite:
             self.episodic_reward += reward
             return self.observation(), reward, self.is_done(), False, None
 
-def greedy_policy(env):
-    action_mask = env.action_mask()  
-    if sum(action_mask) == 1: # only do nothing possible
-        #print('Locked action:', env.action_space[action_mask.index(1)])
-        return env.action_space[action_mask.index(1)]
-
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
-    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
-    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
-
-    min_processing_time = float('inf')
-    lowest_processing_times = []
-
-    for assignment in assignments:
-        resource, task = assignment[0:-1], assignment[-1]
-        processing_time = env.resource_pools[task][resource][0]
-        if processing_time < min_processing_time:
-            min_processing_time = processing_time
-            lowest_processing_times = [assignment]
-        elif processing_time == min_processing_time:
-            lowest_processing_times.append(assignment)
-
-    assignment = random.choice(lowest_processing_times)
-    possible_double_assignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
-
-    if len(possible_double_assignments) > 0:
-        min_processing_time = float('inf')
-        lowest_processing_times = []
-
-        for double_assignment in possible_double_assignments:
-            if double_assignment[0] == assignment:
-                other_action = double_assignment[1]
-            else:
-                other_action = double_assignment[0]
-            resource, task = other_action[0:-1], other_action[-1]
-            processing_time = env.resource_pools[task][resource][0]
-            if processing_time < min_processing_time:
-                min_processing_time = processing_time
-                lowest_processing_times = [double_assignment]
-            elif processing_time == min_processing_time:
-                lowest_processing_times.append(double_assignment)
-    
-    if len(lowest_processing_times) > 0:
-        return random.choice(lowest_processing_times)
-    else:
-        return assignment
-
-def fifo_policy(env):
-    action_mask = env.action_mask()
-    if sum(action_mask) == 1: # only do nothing possible
-        return 'do_nothing'
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action] # Excluding postpone, do_nothing
-    possible_tasks = [action[-1] for action in possible_actions if isinstance(action, str)]
-
-    # Identify the case that has been in the system the longest
-    all_waiting_cases = sorted([(case_id, task) for task in env.waiting_cases for case_id in env.waiting_cases[task] if task in possible_tasks], key=lambda x: x[0])
-    # print('Waiting cases:', all_waiting_cases)
-    # print('Possible actions:', possible_actions)
-
-    i = 0
-    while i < len(all_waiting_cases):
-        longest_waiting_case_id = all_waiting_cases[i][0] # if len(all_waiting_cases) > 0 else None
-        longest_case_tasks = [(case_id, task) for case_id, task in all_waiting_cases if case_id == longest_waiting_case_id]
-        
-        # Identify if the longest waiting case can be processed        
-        longest_waiting_case_tasks = [task for case_id, task in longest_case_tasks]
-        if len(longest_waiting_case_tasks) == 0:
-            i += 1
-            continue
-        random.shuffle(longest_waiting_case_tasks) # Randomly assign a task of the longest waiting case
-        selected_task = longest_waiting_case_tasks[0]
-
-        # Get an assignment with the selected task (of the longest waiting case)
-        possible_assignments = [action for action in possible_actions if action[-1] == selected_task]
-        if len(possible_assignments) > 0:
-            assignment = random.choice([action for action in possible_actions if action[-1] == selected_task])
-        else:
-            i += 1
-            continue
-        #print('Selected assignment:', assignment)
-        # Create list of possible double assignments
-        possible_double_assignments = [double_assignment for double_assignment in possible_actions if isinstance(double_assignment, tuple) and assignment in double_assignment]
-
-        #print(possible_double_assignments)
-        if len(possible_double_assignments) > 0:
-            checked_case_ids = []
-            # Check for each case if the selected task is in the double assignment
-            for (case_id, task) in all_waiting_cases:
-                #print('checking case:', case_id)
-                if case_id not in checked_case_ids:
-                    checked_case_ids.append(case_id)
-                else:
-                    continue
-                # Create list of tasks of the (second) longest waiting case
-                tasks_of_case_id = [task2 for case_id2, task2 in all_waiting_cases if case_id2 == case_id]
-                #print('Tasks of case:', case_id, tasks_of_case_id)
-                possible_double_assignments_case = []
-                for task2 in tasks_of_case_id:
-                    if task2 != selected_task:
-                        possible_double_assignments_case += [double_assignment 
-                                                             for double_assignment in possible_double_assignments 
-                                                             if task2 in double_assignment[0] or task2 in double_assignment[1]]
-                if len(possible_double_assignments_case) > 0:
-                    assignment = random.choice(possible_double_assignments_case)
-                    #print('returned assignment', assignment, '\n')
-                    return tuple(assignment)
-        else:
-            #print('returned assignment', assignment, '\n')
-            return assignment
-
-def random_policy(env):
-    action_mask = env.action_mask()  
-    if sum(action_mask) == 1: # only do nothing possible
-        return env.action_space[action_mask.index(1)]
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
-    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
-    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
-
-    assignment = random.choice(assignments)
-    possible_double_asignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
-
-    if len(possible_double_asignments) > 0:
-        return tuple(random.choice(possible_double_asignments))
-    else:
-        return assignment
-
 if __name__ == '__main__':
+    from heuristic_policies import fifo_policy, random_policy, greedy_policy, threshold_policy
     # smdp = SMDP_composite(2500, 'complete')
     # print(smdp.sample_next_task('k'))
     # print(smdp.state_space)
@@ -539,7 +446,7 @@ if __name__ == '__main__':
         time_iter = 1
         #reporter = EventLogReporter("smdp_log.txt")
         reporter = ProcessReporter()
-        env = SMDP_composite(2500, 'complete')
+        env = SMDP_composite(2500, 'composite')
 
         done = False
         steps = 0

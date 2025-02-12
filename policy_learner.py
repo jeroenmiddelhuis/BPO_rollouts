@@ -1,16 +1,19 @@
 import numpy as np
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
-import tensorflow as tf
-from xgboost import XGBClassifier
-import xgboost as xgb
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from sb3_contrib import MaskablePPO
+import copy as cp
 
-class PolicyLearner:
+
+class PolicyLearner():
     
     CACHE_SIZE = 50000
 
     def __init__(self):
+        super(PolicyLearner, self).__init__()
         self.model = None
         self.cache = {}
         self.cache_hits = 0
@@ -18,56 +21,77 @@ class PolicyLearner:
         self.cache_evictions = 0
         self.model_type = None
 
-    def build_model(self, observations, actions, model_type='neural_network'):
+    def build_model(self, observations, actions):
         # Convert observations to numpy array and normalize each observation
         observations = np.array(observations, dtype=float)
-        observations = np.apply_along_axis(self.normalize_observation, 1, observations)
-        if model_type == 'neural_network':
-            self.model_type = 'neural_network'
-            input_dim = len(observations[0])
-            output_dim = len(actions[0])
 
-            inputs = tf.keras.Input(shape=(input_dim,))
-            x = tf.keras.layers.Dense(128, activation='relu')(inputs)
-            x = tf.keras.layers.Dense(128, activation='relu')(x)
-            outputs = tf.keras.layers.Dense(output_dim, activation='softmax')(x)
+        self.model_type = 'neural_network'
+        input_dim = len(observations[0])
+        output_dim = len(actions[0])
 
-            self.model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim),
+            nn.Softmax(dim=-1)
+        )
 
-            # Compile the model
-            self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-        elif model_type == 'xgboost':
-            self.model_type = 'xgboost'
-            self.model = XGBClassifier(
-                n_estimators=100, # 
-                learning_rate=0.1,#
-                max_depth=5,#
-                min_child_weight=1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                gamma=0
-            )
-            self.model.fit(observations, actions)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.criterion = nn.CrossEntropyLoss()
 
     def update_model(self, observations, actions):
-        # Reset the cache to evict old entries
+        # Reset the cache
         self.cache = {}
         self.cache_hits = 0
         self.cache_misses = 0
         self.cache_evictions = 0
 
-        # Convert observations to numpy array and normalize each observation
+        # Convert and normalize data
         observations = np.array(observations, dtype=float)
         observations = np.apply_along_axis(self.normalize_observation, 1, observations)
         actions = np.array(actions)
-        
-        if isinstance(self.model, tf.keras.Model):
-            self.model.fit(observations, actions, epochs=25, batch_size=64)
-        elif isinstance(self.model, XGBClassifier):
-            dtrain = xgb.DMatrix(observations, label=actions)
-            params = self.model.get_xgb_params()
-            self.model = xgb.train(params, dtrain, xgb_model=self.model.get_booster())
-    
+
+        # Convert to PyTorch tensors
+        observations = torch.tensor(observations, dtype=torch.float32)
+        actions = torch.tensor(actions, dtype=torch.float32)
+
+        # Training improvements
+        batch_size = 64
+        epochs = 100
+        best_loss = float('inf')
+        patience = 10
+        patience_counter = 0
+
+        # Train the model with early stopping
+        self.model.train()
+        for epoch in range(epochs):
+            total_loss = 0
+            # Mini-batch training
+            for i in range(0, len(observations), batch_size):
+                batch_obs = observations[i:i + batch_size]
+                batch_acts = actions[i:i + batch_size]
+                
+                self.optimizer.zero_grad()
+                outputs = self.model(batch_obs)
+                loss = self.criterion(outputs, batch_acts)
+                loss.backward()
+                self.optimizer.step()
+                
+                total_loss += loss.item()
+
+            avg_loss = total_loss / (len(observations) / batch_size)
+            
+            # Early stopping check
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    break
+
     def normalize_observation(self, observation):
         if len(observation) == 3: # single_activity
             observation[-1] = np.minimum(1.0, observation[-1] / 100.0)
@@ -78,17 +102,14 @@ class PolicyLearner:
         return observation
 
     def predict(self, observation, action_mask):
+        if sum(action_mask) == 1:
+            return action_mask
         observation = np.array(observation, dtype=float)
         observation = self.normalize_observation(observation)
-        observation = observation.reshape(1, -1)
-        action_mask = np.array(action_mask)
-        action_mask = action_mask.reshape(1, -1)
-
-        action_probs = self.predict_with_cache(observation, action_mask)
+        action_probs = self.predict_with_cache(observation, action_mask)        
         action_probs = action_probs * action_mask
-        action = [0] * len(action_probs[0])
+        action = [0] * len(action_probs)
         action[np.argmax(action_probs)] = 1
-
         return action
     
     def predict_with_cache(self, observation, action_mask=None):
@@ -97,18 +118,17 @@ class PolicyLearner:
         If it is not in cache, it calculates the prediction and stores it in cache.
         If the cache is full, it removes the oldest entry.
         """
-        observation_tuple = tuple(observation[0])
+        observation_tuple = tuple(observation)
         cached_value = self.cache.get(observation_tuple)
         if cached_value is not None:
             self.cache_hits += 1
             return cached_value
 
-        if isinstance(self.model, tf.keras.Model):
+        # No value has been found in the cache, calculate the prediction
+        if isinstance(self.model, nn.Module):
+            observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
             action_probs = self.model(observation)[0]
-        elif isinstance(self.model, xgb.Booster):
-            dmatrix = xgb.DMatrix(observation)
-            action_probs = self.model.predict(dmatrix)
-            action_probs = np.exp(action_probs) / np.sum(np.exp(action_probs))  # Apply softmax
+            action_probs = action_probs.detach().numpy()
         elif isinstance(self.model, MaskablePPO):
             action_probs = self.model.predict(observation, action_masks=action_mask)[0]
         else:
@@ -131,21 +151,18 @@ class PolicyLearner:
         return self.predict(observation, action_mask)
     
     def save(self, filename):
-        if filename.endswith('.keras'):
-            self.model.save(filename)
+        if filename.endswith('.pth'):
+            torch.save(self.model, filename)
         elif filename.endswith('.json'):
             self.model.save_model(filename)
 
     def load(filename):
-        if filename.endswith('.keras'):
+        if filename.endswith('.pth'):
             self = PolicyLearner()
-            self.model = tf.keras.models.load_model(filename)
-        elif filename.endswith('.json'):
-            self = PolicyLearner()
-            self.model = xgb.Booster()
-            self.model.load_model(filename)
+            self.model = torch.load(filename, weights_only=False)
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            self.criterion = nn.CrossEntropyLoss()
         elif filename.endswith('.zip'):
-            self = PolicyLearner()
             self.model = MaskablePPO.load(filename)
         return self
 
@@ -155,19 +172,12 @@ class PolicyLearner:
         print("Cache evictions: ", self.cache_evictions)
 
     def copy(self):
-        print(type(self.model))
-        if isinstance(self.model, tf.keras.Model):
-            model = tf.keras.models.clone_model(self.model)
-            model.set_weights(self.model.get_weights())
-        elif isinstance(self.model, xgb.Booster):
-            model = XGBClassifier()
-            model._Booster = self.model.get_booster()
-            model._le = self.model._le
-            model._feature_names = self.model.get_booster().feature_names
-            model._feature_types = self.model.get_booster().feature_types
-
         learner = PolicyLearner()
-        learner.model = model
+        # Create a deep copy of the entire model
+        learner.model = cp.deepcopy(self.model)
+        learner.optimizer = optim.Adam(learner.model.parameters(), lr=0.001)
+        learner.criterion = nn.CrossEntropyLoss()
+        print('Model successfully copied', flush=True)
         return learner
 
 class ValueIterationPolicy():
@@ -229,22 +239,70 @@ class ValueIterationPolicy():
 
 
 if __name__ == "__main__":
-    # Test the PolicyLearner class
+
+    
     import random
 
-    # Create some random observations and actions
-    observations = [[random.randint(0, 1) for _ in range(6)] + [random.randint(0, 100) for _ in range(2)] for _ in range(1000)]
-    print(observations[:10])
-    actions = [[random.choice([0, 1]) for _ in range(3)] for _ in range(1000)]
 
-    # Create a PolicyLearner and build a model
-    pl = PolicyLearner()
-    pl.build_model(observations, actions, model_type='neural_network')
-    pl.update_model(observations, actions)
 
-    # Test the predict function
-    observation = [random.randint(0, 1) for _ in range(6)] + [random.randint(0, 100) for _ in range(2)]
-    action_mask = [random.choice([0, 1]) for _ in range(3)]
-    action = pl.predict(observation, action_mask)
-    print("Predicted action: ", action)
+    ######### Check if the models are different
+    pl2 = PolicyLearner.load('./models/pi/mdp/single_activity/single_activity.best_policy.pth')
+    for i in range(1, 11):
+        pl = PolicyLearner.load(f'./models/pi/mdp/single_activity/single_activity.v{i}.pth')    
+
+        # Compare if the models are different
+        are_models_different = False
+        for param1, param2 in zip(pl.model.parameters(), pl2.model.parameters()):
+            #print(param1, param2)
+            if not torch.equal(param1, param2):
+                are_models_different = True
+                break
+
+        if are_models_different:
+            print("The models are different.", i)
+        else:
+            print("The models are identical.", i)
+
+
+
+    ###### Check if the model is copied correctly
+    # pl = PolicyLearner.load('./models/pi/smdp/down_stream/down_stream.v1.pth')
+    # pl_copy = pl.copy()
+
+    # # Print parameters before update
+    # print("Before update:")
+    # for (name1, param1), (name2, param2) in zip(pl.model.named_parameters(), pl_copy.model.named_parameters()):
+    #     print(f"{name1}: Equal = {torch.equal(param1, param2)}")
+
+    # # Update original model
+    # pl.update_model([[random.randint(0, 1) for _ in range(6)] + 
+    #                 [random.randint(0, 100) for _ in range(2)] for _ in range(1000)], 
+    #                 [[random.choice([0, 1]) for _ in range(6)] for _ in range(1000)])
+
+    # # Print parameters after update
+    # print("\nAfter update:")
+    # for (name1, param1), (name2, param2) in zip(pl.model.named_parameters(), pl_copy.model.named_parameters()):
+    #     print(f"{name1}: Equal = {torch.equal(param1, param2)}")
+
+
+
+
+
+
+
+
+
+    # # Create some random observations and actions
+    # observations = [[random.randint(0, 1) for _ in range(6)] + [random.randint(0, 100) for _ in range(2)] for _ in range(1000)]
+    # print(observations[:10])
+    # actions = [[random.choice([0, 1]) for _ in range(3)] for _ in range(1000)]
+
+    # # Update the model with new observations and actions
+    # pl.update_model(observations, actions)
+
+    # # Test the predict function
+    # observation = [random.randint(0, 1) for _ in range(6)] + [random.randint(0, 100) for _ in range(2)]
+    # action_mask = [random.choice([0, 1]) for _ in range(6)]
+    # action = pl.predict(observation, action_mask)
+    # print("Predicted action: ", action)
 

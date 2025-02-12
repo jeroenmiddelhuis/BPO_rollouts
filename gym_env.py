@@ -79,21 +79,28 @@ class Environment(Env):
 
 def main():
     import mdp, smdp
-    env = mdp.MDP(3000, 'low_utilization', tau=0.6667579762550317 / 2)
+    from heuristic_policies import fifo_policy, random_policy, greedy_policy, threshold_policy
+    env = mdp.MDP(2500, 'high_utilization')
     gym_env = Environment(env)
-    pl = mdp.greedy_policy
+    pl = greedy_policy
     total_rewards = []
+    cycle_times = []
     for _ in range(100):
         total_reward = 0
         gym_env.reset()
         while True:
-            action = pl(env)
-            action = np.argmax(action)
+            action = pl(gym_env.env)
+            if isinstance(action, list):
+                action = gym_env.env.action_space[np.argmax(action)]
+            action = gym_env.env.action_space.index(action)
             observation, reward, done, _, _ = gym_env.step(action)
             total_reward += reward
             if done:
+                cycle_times.append(np.mean(list(gym_env.env.cycle_times.values())))
                 break
         total_rewards.append(total_reward)
     print(np.mean(total_rewards), np.std(total_rewards))
+    print(np.mean(cycle_times), np.std(cycle_times))
+
 if __name__ == '__main__':
     main()

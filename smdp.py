@@ -4,8 +4,9 @@ import numpy as np
 import random
 
 class SMDP:
-
-    def __init__(self, nr_arrivals, config_type='single_activity', reporter=None, reward_function='AUC', track_cycle_times=False, is_stopping_criteria_time=False):
+    def __init__(self, nr_arrivals, config_type='single_activity', 
+                 reporter=None, crn=None, reward_function='AUC', 
+                 track_cycle_times=True, is_stopping_criteria_time=False):
         """
         For now, we just implement the simple SMDP with:
         one task (A), two resources (r1, r2), case arrival rate lambda = 0.5, 
@@ -20,6 +21,7 @@ class SMDP:
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
+        self.crn = crn
         # Variable used to track the cycle times of the cases
         # When setting the state, the cycle times cannot be tracked so we need to disable it then
         self.track_cycle_times = track_cycle_times
@@ -95,22 +97,22 @@ class SMDP:
         self.reporter = reporter
         
     def observation(self):
-        is_available_r1 = len(self.processing_r1) > 0 # True if there is a case being processed by r1
-        is_available_r2 = len(self.processing_r2) > 0
+        is_available_r1 = 1 if len(self.processing_r1) == 0 else 0 # True if there is a case being processed by r1
+        is_available_r2 = 1 if len(self.processing_r2) == 0 else 0
         if self.config_type == 'single_activity': # single activity
             waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
-            return [1-is_available_r1, 1-is_available_r2] + waiting_cases
+            return [is_available_r1, is_available_r2] + waiting_cases
         else: # Other scenarios
-            assigned_r1a = 1 if is_available_r1 and self.processing_r1[-1][1] == 'a' else 0
-            assigned_r1b = 1 if is_available_r1 and self.processing_r1[-1][1] == 'b' else 0
-            assigned_r2a = 1 if is_available_r2 and self.processing_r2[-1][1] == 'a' else 0
-            assigned_r2b = 1 if is_available_r2 and self.processing_r2[-1][1] == 'b' else 0
+            assigned_r1a = 1 if not is_available_r1 and self.processing_r1[-1][1] == 'a' else 0
+            assigned_r1b = 1 if not is_available_r1 and self.processing_r1[-1][1] == 'b' else 0
+            assigned_r2a = 1 if not is_available_r2 and self.processing_r2[-1][1] == 'a' else 0
+            assigned_r2b = 1 if not is_available_r2 and self.processing_r2[-1][1] == 'b' else 0
             waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
             if self.config_type != 'n_system':
-                return [1-is_available_r1, 1-is_available_r2, assigned_r1a, assigned_r1b, assigned_r2a, assigned_r2b] + waiting_cases
+                return [is_available_r1, is_available_r2, assigned_r1a, assigned_r1b, assigned_r2a, assigned_r2b] + waiting_cases
             else:
-                return [1-is_available_r1, 1-is_available_r2, assigned_r2a, assigned_r2b] + waiting_cases
-
+                return [is_available_r1, is_available_r2, assigned_r2a, assigned_r2b] + waiting_cases
+        
     def action_mask(self):
         # single activity
         if len(self.task_types) == 1: 
@@ -175,6 +177,8 @@ class SMDP:
                         postpone_possible, do_nothing_possible]
    
     def reset(self):
+        if self.crn:
+            self.crn.reset()
         self.waiting_cases = {task: [] for task in self.task_types}
         self.partially_completed_cases = []
         self.processing_r1 = []
@@ -228,7 +232,10 @@ class SMDP:
             # Check if the sum is approximately 1 or less, considering rounding errors
             if np.isclose(total_sum, 1, atol=1e-9) or total_sum < 1:
                 # Draw a random sample using the crn class
-                return [np.random.choice(self.task_types_all, p=p_transitions)]
+                if self.crn:
+                    return [self.crn.choice(self.task_types_all, weights=p_transitions)]
+                else:
+                    return [np.random.choice(self.task_types_all, p=p_transitions)]
             else:
                 raise ValueError("The sum of the transition probabilities must be 1 or less.")
 
@@ -312,6 +319,7 @@ class SMDP:
                     case_id = self.waiting_cases[task].pop(0)
                     if self.track_cycle_times: 
                         self.processing_starts[case_id][(task, resource)] = self.total_time
+                        self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
                     getattr(self, f'processing_{resource}').append((case_id, task))
                     if self.reporter:
                         self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
@@ -339,10 +347,17 @@ class SMDP:
         if sum_of_rates == 0:
             return self.observation(), 0, self.is_done(), False, None
         else:
-            time = random.expovariate(sum_of_rates)
+            if self.crn:
+                time = self.crn.generate_exponential(sum_of_rates)
+            else:
+                time = random.expovariate(sum_of_rates)
             self.total_time += time
+
             events, probs = zip(*list(evolutions.items()))
-            evolution = np.random.choice(events, p=probs)
+            if self.crn:
+                evolution = self.crn.choice(events, weights=probs)
+            else:
+                evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival':
                 if self.track_cycle_times:
@@ -366,10 +381,10 @@ class SMDP:
                 resource, task = evolution[0:2], evolution[2]
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]  
                 if self.track_cycle_times:
-                    self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
                     self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)]              
                 next_tasks = self.sample_next_task(task, case_id)
-                self.partially_completed_cases.append(case_id)
+                if self.config_type == 'parallel':
+                    self.partially_completed_cases.append(case_id)
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:
@@ -391,155 +406,21 @@ class SMDP:
             self.episodic_reward += reward
             return self.observation(), reward, self.is_done(), False, None
 
-def greedy_policy(env):
-    action_mask = env.action_mask()  
-    if sum(action_mask) == 1: # only do nothing possible
-        #print('Locked action:', env.action_space[action_mask.index(1)])
-        return env.action_space[action_mask.index(1)]
-
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
-    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
-    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
-
-    min_processing_time = float('inf')
-    lowest_processing_times = []
-
-    for assignment in assignments:
-        resource, task = assignment[0:-1], assignment[-1]
-        processing_time = env.resource_pools[task][resource][0]
-        if processing_time < min_processing_time:
-            min_processing_time = processing_time
-            lowest_processing_times = [assignment]
-        elif processing_time == min_processing_time:
-            lowest_processing_times.append(assignment)
-
-    assignment = random.choice(lowest_processing_times)
-    possible_double_assignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
-
-    if len(possible_double_assignments) > 0:
-        min_processing_time = float('inf')
-        lowest_processing_times = []
-
-        for double_assignment in possible_double_assignments:
-            if double_assignment[0] == assignment:
-                other_action = double_assignment[1]
-            else:
-                other_action = double_assignment[0]
-            resource, task = other_action[0:-1], other_action[-1]
-            processing_time = env.resource_pools[task][resource][0]
-            if processing_time < min_processing_time:
-                min_processing_time = processing_time
-                lowest_processing_times = [double_assignment]
-            elif processing_time == min_processing_time:
-                lowest_processing_times.append(double_assignment)
-    
-    if len(lowest_processing_times) > 0:
-        return random.choice(lowest_processing_times)
-    else:
-        return assignment
-
-def fifo_policy(env):
-    action_mask = env.action_mask()
-    if sum(action_mask) == 1: # only do nothing possible
-        return env.action_space[action_mask.index(1)]
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action] # Excluding postpone, do_nothing
-    possible_tasks = [action[-1] for action in possible_actions if isinstance(action, str)]
-
-    # Identify the case that has been in the system the longest
-    all_waiting_cases = sorted([(case_id, task) for task in env.waiting_cases for case_id in env.waiting_cases[task] if task in possible_tasks], key=lambda x: x[0])
-
-    i = 0
-    while i < len(all_waiting_cases):
-        longest_waiting_case_id = all_waiting_cases[i][0] # if len(all_waiting_cases) > 0 else None
-        longest_case_tasks = [(case_id, task) for case_id, task in all_waiting_cases if case_id == longest_waiting_case_id]
-        
-        # Identify if the longest waiting case can be processed        
-        longest_waiting_case_tasks = [task for case_id, task in longest_case_tasks]
-        if len(longest_waiting_case_tasks) == 0:
-            i += 1
-            continue
-        random.shuffle(longest_waiting_case_tasks) # Randomly assign a task of the longest waiting case
-        selected_task = longest_waiting_case_tasks[0]
-
-        # Get an assignment with the selected task (of the longest waiting case)
-        possible_assignments = [action for action in possible_actions if action[-1] == selected_task]
-        if len(possible_assignments) > 0:
-            assignment = random.choice([action for action in possible_actions if action[-1] == selected_task])
-        else:
-            i += 1
-            continue
-        #print('Selected assignment:', assignment)
-        # Create list of possible double assignments
-        possible_double_assignments = [double_assignment for double_assignment in possible_actions if isinstance(double_assignment, tuple) and assignment in double_assignment]
-
-        #print(possible_double_assignments)
-        if len(possible_double_assignments) > 0:
-            checked_case_ids = []
-            # Check for each case if the selected task is in the double assignment
-            for (case_id, task) in all_waiting_cases:
-                #print('checking case:', case_id)
-                if case_id not in checked_case_ids:
-                    checked_case_ids.append(case_id)
-                else:
-                    continue
-                # Create list of tasks of the (second) longest waiting case
-                tasks_of_case_id = [task2 for case_id2, task2 in all_waiting_cases if case_id2 == case_id]
-                #print('Tasks of case:', case_id, tasks_of_case_id)
-                possible_double_assignments_case = []
-                for task2 in tasks_of_case_id:
-                    if task2 != selected_task:
-                        possible_double_assignments_case += [double_assignment 
-                                                             for double_assignment in possible_double_assignments 
-                                                             if task2 in double_assignment[0] or task2 in double_assignment[1]]
-                if len(possible_double_assignments_case) > 0:
-                    assignment = random.choice(possible_double_assignments_case)
-                    return tuple(assignment)
-        else:
-            return assignment
-
-def random_policy(env):
-    action_mask = env.action_mask()  
-    if sum(action_mask) == 1: # only do nothing possible
-        return env.action_space[action_mask.index(1)]
-    possible_actions = [env.action_space[i] for i, action in enumerate(action_mask[:-2]) if action]
-    assignments = [assignment for assignment in possible_actions if isinstance(assignment, str)]
-    double_assignments = [assignment for assignment in possible_actions if isinstance(assignment, tuple)]
-
-    assignment = random.choice(assignments)
-    possible_double_asignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
-
-    if len(possible_double_asignments) > 0:
-        return tuple(random.choice(possible_double_asignments))
-    else:
-        return assignment
-
-def threshold_policy(env, observation=None, action_mask=None, threshold=3):
-    if action_mask is None and observation is None:  # this is mainly for testing purposes
-        observation = env.observation()
-        action_mask = env.action_mask()
-    action = [0] * len(action_mask)
-    action_index = min([i for i in range(len(action_mask)) if action_mask[i]])
-    action[action_index] = 1
-    if action_index == 1:  # if we are assigning r2, but there are few cases waiting, it may be better to postpone
-        if observation[2] < threshold and action_mask[2]:  # but note that this is only allowed if we can postpone
-            action = [0, 0, 1, 0]
-    return action
-
-
 if __name__ == '__main__':
-    nr_replications = 300
+    from heuristic_policies import fifo_policy, random_policy, greedy_policy, threshold_policy
+    nr_replications = 3
     avg_cycle_times = []
     total_rewards = []
-    for _ in range(nr_replications):
-        #reporter = EventLogReporter("smdp_log.txt")
+    for i in range(nr_replications):
+        #reporter = EventLogReporter(f"./data/slow_server_log_greedy_{i+1}.txt")
         reporter = ProcessReporter()
-        env = SMDP(2500, 'n_system', reporter, track_cycle_times=True)
+        env = SMDP(2500, 'slow_server', reporter)
 
         done = False
         steps = 0
         total_reward = 0
         while not done:
-            action = fifo_policy(env)
+            action = greedy_policy(env)
             state, reward, done, _, _ = env.step(action)
             total_reward += reward
             time = env.total_time
