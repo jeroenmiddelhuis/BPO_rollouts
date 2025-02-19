@@ -375,6 +375,8 @@ class SMDP:
                             reward += -self.cycle_times[case_id]
                         elif self.reward_function == 'inverse_case_cycle_time':
                             reward += 1/(1 + self.cycle_times[case_id])
+                        elif self.reward_function == 'case':
+                            reward += 1
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
             if self.reward_function == 'AUC':

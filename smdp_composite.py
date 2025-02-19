@@ -35,19 +35,17 @@ class SMDP_composite:
                      for task in self.task_types 
                      if f'r{i}' in self.resource_pools[task]}
         self.evolution_rates['arrival'] = self.arrival_rate
-
-        self.state_space = ([f'is_available_{r}' for r in self.resources] + 
-                            [f'assigned_{resource}{task}' for resource in self.resources 
-                                            for task in self.task_types                                             
-                                            if resource in self.resource_pools[task] and resource != 'r9'] + # r9 can only be assigned to one task
-                            [f'waiting_{task}' for task in self.task_types])
         
         self.action_space = [f"{resource}{task}" for resource in self.resources 
                              for task in self.task_types 
                              if resource in self.resource_pools[task] and task != 'Start'] 
-        
         self.assignments = self.action_space.copy()
-        self.assignment_indices = {assignment: idx for idx, assignment in enumerate(self.assignments)}
+        self.assignment_indices = {assignment: idx for idx, assignment in enumerate(self.assignments)}        
+
+        self.state_space = ([f'is_available_{r}' for r in self.resources] + 
+                            [f'assigned_{assignment}' for assignment in self.assignments] + # r9 can only be assigned to one task
+                            [f'waiting_{task}' for task in self.task_types])
+        
         # double actions
         # high utilization
         self.double_assignments =  [(ass1, ass2) 
@@ -383,6 +381,8 @@ class SMDP_composite:
                             reward += -self.cycle_times[case_id]
                         elif self.reward_function == 'inverse_case_cycle_time':
                             reward += 1/(1 + self.cycle_times[case_id])
+                        elif self.reward_function == 'case':
+                            reward += 1
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
             if self.reward_function == 'AUC':

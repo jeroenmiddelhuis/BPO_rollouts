@@ -261,29 +261,29 @@ def main():
     Training of the policies
     """
 
-    # nr_rollouts = 100
-    # nr_steps_per_rollout = 100
-    # config_type = sys.argv[1] if len(sys.argv) > 1 else 'single_activity'
-    # model_type = 'neural_network'
-    # learning_iterations = 20
+    nr_rollouts = 100
+    nr_steps_per_rollout = 100
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
+    model_type = 'neural_network'
+    learning_iterations = 20
 
-    # dir = f".//models//pi//smdp//{config_type}//"
-    # if not os.path.exists(dir):
-    #     os.makedirs(dir, exist_ok=True)
+    dir = f".//models//pi//smdp//{config_type}//"
+    if not os.path.exists(dir):
+        os.makedirs(dir, exist_ok=True)
 
-    # print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
-    # print('Nr rollouts:', nr_rollouts, flush=True)
-    # print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
+    print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+    print('Nr rollouts:', nr_rollouts, flush=True)
+    print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
 
-    # learn(config_type,
-    #     greedy_policy,
-    #     dir,
-    #     learning_iterations=learning_iterations,
-    #     episode_length=2500, # nr_cases
-    #     nr_states_to_explore=5000,
-    #     nr_rollouts=nr_rollouts,
-    #     nr_steps_per_rollout=nr_steps_per_rollout,
-    #     model_type=model_type)
+    learn(config_type,
+        greedy_policy,
+        dir,
+        learning_iterations=learning_iterations,
+        episode_length=2500, # nr_cases
+        nr_states_to_explore=5000,
+        nr_rollouts=nr_rollouts,
+        nr_steps_per_rollout=nr_steps_per_rollout,
+        model_type=model_type)
 
 
     """
@@ -306,36 +306,36 @@ def main():
     #             env_types.append('mdp')
     #         for env_type in env_types:
 
-    config_type = 'single_activity'
-    policy = 'pi'
-    env_type = 'mdp'
+    # config_type = 'single_activity'
+    # policy = 'pi'
+    # env_type = 'mdp'
 
-    print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
-    results_dir = f".//results//{policy}//"
-    os.makedirs(results_dir, exist_ok=True)
+    # print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
+    # results_dir = f".//results//{policy}//"
+    # os.makedirs(results_dir, exist_ok=True)
 
-    env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
+    # env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
     
-    if policy == 'greedy':
-        pl = greedy_policy
-    elif policy == 'random':
-        pl = random_policy
-    elif policy == 'fifo':
-        pl = fifo_policy
-    elif policy == 'threshold':
-        pl = threshold_policy
-    elif policy == 'vi':
-        filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
-        pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
-    elif policy == 'pi':
-        filename = f"./models/pi/{env_type}/{config_type}/{config_type}.v{i}.pth"
-        pl = policy_learner.PolicyLearner.load(filename)
-        print('Filling cache..')
-        pl.cache = fill_cache(env, pl)
-        print(f'Cache filled with {len(pl.cache)} state-action pairs.')
+    # if policy == 'greedy':
+    #     pl = greedy_policy
+    # elif policy == 'random':
+    #     pl = random_policy
+    # elif policy == 'fifo':
+    #     pl = fifo_policy
+    # elif policy == 'threshold':
+    #     pl = threshold_policy
+    # elif policy == 'vi':
+    #     filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
+    #     pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
+    # elif policy == 'pi':
+    #     filename = f"./models/pi/{env_type}/{config_type}/{config_type}.v{i}.pth"
+    #     pl = policy_learner.PolicyLearner.load(filename)
+    #     print('Filling cache..')
+    #     pl.cache = fill_cache(env, pl)
+    #     print(f'Cache filled with {len(pl.cache)} state-action pairs.')
 
-    evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300,
-                    results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
+    # evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300,
+    #                 results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
 
 
 if __name__ == '__main__':

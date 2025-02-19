@@ -7,7 +7,7 @@ class Environment(Env):
         super().__init__()
         self.env = env
         self.config_type = env.config_type
-        self.nr_actions = len(env.action_space)
+        self.nr_actions = len(env.action_space)#
         print(self.config_type)
         self.episode_reward = 0
         self.selected_actions = {action: 0 for action in self.env.action_space}

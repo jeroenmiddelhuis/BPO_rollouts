@@ -226,7 +226,8 @@ def main():
         'n_system': 1.0013236383088864,
         'parallel': 0.6680392125284501,
         'down_stream': 0.6681612256898539,
-        'single_activity': 1.0042253394472318
+        'single_activity': 1.0042253394472318,
+        'composite': 0.1702603617565683
     }
 
     minimium_transition_time = {
@@ -244,10 +245,10 @@ def main():
                                 + 1/1.6 + 1/1.6 
                                 + 1/1.6 + 1/1.6)
     }
-
+    print(minimium_transition_time)
     nr_rollouts = 100
     nr_steps_per_rollout = 100
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
     model_type = 'neural_network'
     learning_iterations = 20
 

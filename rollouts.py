@@ -147,17 +147,22 @@ def process_state(args):
     state, env_type, episode_length, config_type,\
     tau, policy, nr_rollouts_per_action_per_state,\
     nr_steps_per_rollout, only_statistically_significant = args
-    
     if env_type == "smdp":
-        env2 = smdp.SMDP(episode_length, config_type, track_cycle_times=False)
+        if config_type == 'composite':
+            env_copy = smdp_composite.SMDP_composite(episode_length, config_type, track_cycle_times=False)
+        else:
+            env_copy = smdp.SMDP(episode_length, config_type, track_cycle_times=False)
     elif env_type == "mdp":
-        env2 = mdp.MDP(episode_length, config_type, tau, track_cycle_times=False)
+        if config_type == 'composite':
+            env_copy = mdp_composite.MDP_composite(episode_length, config_type, tau, track_cycle_times=False)
+        else:
+            env_copy = mdp.MDP(episode_length, config_type, tau, track_cycle_times=False)
     else:
         raise ValueError("Unknown environment type.")
         
-    env2.set_state(state)
+    env_copy.set_state(state)
 
-    return find_learning_sample(env2, policy, nr_rollouts_per_action_per_state, 
+    return find_learning_sample(env_copy, policy, nr_rollouts_per_action_per_state, 
                               nr_steps_per_rollout, only_statistically_significant)
 
 def learn_iteration(env, 
@@ -181,7 +186,7 @@ def learn_iteration(env,
     states = random_states(env, random_policy, nr_states_to_explore) # we use the random policy to sample the start states. SMDP and MDP random policy is the same.
     print('states generated:', len(states))
     # 2. Process states in parallel
-    env_type = "smdp" if isinstance(env, smdp.SMDP) else "mdp"
+    env_type = "smdp" if isinstance(env, smdp.SMDP) or isinstance(env, smdp_composite.SMDP_composite) else "mdp"
     print('Environment type:', env_type)
     # We use the policy to do the rollouts
     args = [(state, env_type, env.nr_arrivals, env.config_type, 
@@ -232,25 +237,18 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
             nr_arrivals = env.nr_arrivals
         env.reset()
         with Pool() as pool:
-            result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=False))
+            result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), 
+                               total=nr_rollouts, disable=True))
             total_rewards, mean_cycle_times = zip(*result)
         return total_rewards, mean_cycle_times
 
 
 def evaluate_policy_single_rollout(args):
     env, policy, nr_arrivals = args
-    if env.env_type == "smdp":
-        if env.config_type == 'composite':
-            env_copy = smdp_composite.SMDP_composite(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
-        else:
-            env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
-    elif env.env_type == "mdp":
-        if env.config_type == 'composite':
-            env_copy = mdp_composite.MDP_composite(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
-        else:
-            env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
+    if env.config_type == 'composite':
+        env_copy = smdp_composite.SMDP_composite(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
     else:
-        raise ValueError("Unknown environment type.")
+        env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
 
     env_copy.reset()
     total_reward = rollout(env_copy, policy)

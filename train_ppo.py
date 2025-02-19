@@ -6,6 +6,7 @@ import numpy as np
 from gym_env import Environment
 import sys
 import smdp, mdp
+import smdp_composite, mdp_composite
 import rollouts
 import policy_learner
 
@@ -32,9 +33,10 @@ time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
 config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
 env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
-reward_function = sys.argv[3] if len(sys.argv) > 3 else 'case_cycle_time'
+reward_function = sys.argv[3] if len(sys.argv) > 3 else 'case'
 is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else 'False'
-
+if config_type == 'composite':
+    time_steps = 2e7
 if is_stopping_criteria_time == 'True':
     is_stopping_criteria_time = True
     stopping_criteria = 'time_limit'
@@ -42,7 +44,7 @@ else:
     is_stopping_criteria_time = False
     stopping_criteria = 'case_limit'
 
-test_mode = True
+test_mode = False
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -77,33 +79,52 @@ if __name__ == '__main__':
             'n_system': 1.0013236383088864,
             'parallel': 0.6680392125284501,
             'down_stream': 0.6681612256898539,
-            'single_activity': 1.0042253394472318
+            'single_activity': 1.0042253394472318,
+            'composite': 0.1702603617565683
         }
 
         minimium_transition_time = {
             'slow_server': 1 / (1/2.0 + 1/1.4 + 1/1.8),
             'low_utilization': 1 / (1/2.0 + 1/1.4 + 1/1.4),
             'high_utilization': 1 / (1/2.0 + 1/1.8 + 1/1.8),
-            'n_system': 1 / (1/2.0 + 1/2.0 + 1/3),
+            'n_system': 1 / (1/2.0 + 1/2.0 + 1/3.0),
             'parallel': 1 / (1/2.0 + 1/1.6 + 1/1.6),
             'down_stream': 1 / (1/2.0 + 1/1.6 + 1/1.6),
-            'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
+            'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0),
+            'composite': 1 / (1/2.0 + 1/1.4 + 1/1.8 
+                                    + 1/1.4 + 1/1.4 
+                                    + 1/1.8 + 1/1.8
+                                    + 1/2.0 + 1/3.0
+                                    + 1/1.6 + 1/1.6 
+                                    + 1/1.6 + 1/1.6)
         }
 
         tau_multiplier = 0.5
         tau = minimium_transition_time[config_type] * tau_multiplier
 
         if env_type == 'mdp':
-            env = mdp.MDP(2500, config_type, 
-                          tau, 
-                          reward_function=reward_function,
-                          track_cycle_times=True,
-                          is_stopping_criteria_time=is_stopping_criteria_time)
-        elif env_type == 'smdp':
-            env = smdp.SMDP(2500, config_type, 
-                            reward_function=reward_function, 
+            if config_type == 'composite':
+                env = mdp_composite.MDP_composite(2500, config_type, 
+                              reward_function=reward_function,
+                              track_cycle_times=True,
+                              is_stopping_criteria_time=is_stopping_criteria_time)   
+            else:
+                env = mdp.MDP(2500, config_type, 
+                            tau, 
+                            reward_function=reward_function,
                             track_cycle_times=True,
                             is_stopping_criteria_time=is_stopping_criteria_time)
+        elif env_type == 'smdp':
+            if config_type == 'composite':
+                env = smdp_composite.SMDP_composite(2500, 
+                              reward_function=reward_function,
+                              track_cycle_times=True,
+                              is_stopping_criteria_time=is_stopping_criteria_time)
+            else:
+                env = smdp.SMDP(2500, config_type, 
+                                reward_function=reward_function, 
+                                track_cycle_times=True,
+                                is_stopping_criteria_time=is_stopping_criteria_time)
 
         print(f'Training agent for {config_type} with {time_steps} timesteps and reward function {reward_function} in updates of {n_steps} steps.')
         
@@ -134,10 +155,16 @@ if __name__ == '__main__':
 
         # Evaluation environment
         # We evalute the model on the SMDP
-        eval_env = smdp.SMDP(2500, config_type, 
-                        reward_function=reward_function, 
-                        track_cycle_times=True,
-                        is_stopping_criteria_time=is_stopping_criteria_time)
+        if config_type == 'composite':
+            eval_env = smdp_composite.SMDP_composite(2500, 
+                              reward_function=reward_function,
+                              track_cycle_times=True,
+                              is_stopping_criteria_time=is_stopping_criteria_time)
+        else:
+            eval_env = smdp.SMDP(2500, config_type, 
+                            reward_function=reward_function, 
+                            track_cycle_times=True,
+                            is_stopping_criteria_time=is_stopping_criteria_time)
         
         gym_env_eval = Environment(eval_env)  # Initialize env
         gym_env_eval = Monitor(gym_env_eval, log_dir)
