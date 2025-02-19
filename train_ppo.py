@@ -30,12 +30,19 @@ lr = 3e-05
 n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
-config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
-env_type = sys.argv[2] if len(sys.argv) > 2 else 'mdp'
-reward_function = sys.argv[3] if len(sys.argv) > 3 else 'AUC'
-is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else True
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
+env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
+reward_function = sys.argv[3] if len(sys.argv) > 3 else 'case_cycle_time'
+is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else 'False'
 
-test_mode = False
+if is_stopping_criteria_time == 'True':
+    is_stopping_criteria_time = True
+    stopping_criteria = 'time_limit'
+else:
+    is_stopping_criteria_time = False
+    stopping_criteria = 'case_limit'
+
+test_mode = True
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -44,27 +51,23 @@ class CustomPolicy(MaskableActorCriticPolicy):
         super(CustomPolicy, self).__init__(*args, **kwargs,
                                            net_arch=net_arch)
 
-def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, is_stopping_criteria_time=False):
-    env = smdp.SMDP(episode_length, config_type, is_stopping_critera_time=is_stopping_criteria_time)
-    pl = policy_learner.PolicyLearner.load(filename)
+def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None):
+    env = smdp.SMDP(episode_length, config_type)
+    pl = policy_learner.PPOPolicy.load(filename)
 
-    rewards = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, ppo=True)
-    average_reward = np.mean(rewards)
-    std_reward = np.std(rewards)
+    rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, parallel=False)
 
-    if not os.path.exists(results_dir):
-        with open(results_dir, 'w') as results_file:
-            results_file.write("mean,std\n")
-    # Write average reward and standard deviation to file
-    with open(results_dir, 'a') as results_file:
-        results_file.write(f"{average_reward},{std_reward}\n")
+    with open(results_dir, 'w') as results_file:
+        results_file.write("reward,cycle_time\n")
+        for i in range(len(rewards)):
+            results_file.write(f"{rewards[i]},{cycle_times[i]}\n")
 
-    print(average_reward, std_reward)  
+    print(np.mean(rewards), np.std(rewards), np.mean(cycle_times), np.std(cycle_times))
 
 if __name__ == '__main__':
     if test_mode == False or test_mode == "False":
         # Create log dir
-        log_dir = f"./models/ppo_test/{env_type}/{config_type}/{reward_function}/" # Logging training results
+        log_dir = f"./models/ppo/{env_type}/{config_type}/{reward_function}/{stopping_criteria}" # Logging training results
         os.makedirs(log_dir, exist_ok=True)
 
         average_step_time_smdp = {
@@ -109,10 +112,10 @@ if __name__ == '__main__':
         gym_env = Environment(env)  # Initialize env
         gym_env = Monitor(gym_env, log_dir)
 
-        if reward_function == 'inverse_case_cycle_time':
-            gamma = 0.999
+        if reward_function == 'AUC':
+            gamma = 1
         else:
-            gamma = 0.99
+            gamma = 0.999
             
         # Create the model
         model = MaskablePPO(CustomPolicy, 
@@ -138,10 +141,10 @@ if __name__ == '__main__':
         
         gym_env_eval = Environment(eval_env)  # Initialize env
         gym_env_eval = Monitor(gym_env_eval, log_dir)
-        eval_callback = EvalPolicyCallback(check_freq=10*int(n_steps), nr_evaluations=10, log_dir=log_dir, eval_env=gym_env_eval)
+        eval_callback = EvalPolicyCallback(check_freq=10*int(n_steps), nr_evaluations=30, log_dir=log_dir, eval_env=gym_env_eval)
         best_reward_callback = SaveOnBestTrainingRewardCallback(check_freq=int(n_steps), log_dir=log_dir)
 
-        model.learn(total_timesteps=int(time_steps))#, callback=eval_callback)#
+        model.learn(total_timesteps=int(time_steps), callback=eval_callback)#
 
         # For episode rewards, use env.get_episode_rewards()®
         # env.get_episode_times() returns the wall clock time in seconds of each episode (since start)
@@ -162,9 +165,10 @@ if __name__ == '__main__':
 
         print(config_type, env_type)
 
-        filename = f"./models/ppo//{env_type}/{config_type}/{reward_function}/best_model.zip"
-        results_dir = f"./results/ppo_{env_type}_{reward_function}_{config_type}.txt"
+        filename = f"./models/ppo//{env_type}/{config_type}/{reward_function}/{stopping_criteria}/best_model.zip"
+        os.makedirs(f"./results/ppo/", exist_ok=True)
+        results_dir = f"./results/ppo/ppo_{config_type}_{env_type}_{reward_function}_{stopping_criteria}.txt"
 
         evaluate_policy(filename, config_type, episode_length=2500, nr_rollouts=300, 
-                        results_dir=results_dir, env_type=env_type)
+                        results_dir=results_dir)
         print('\n')        

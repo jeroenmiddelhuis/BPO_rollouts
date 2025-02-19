@@ -5,6 +5,7 @@ from tqdm import tqdm
 from policy_learner import PolicyLearner
 from crn import CRN
 import smdp, mdp
+import smdp_composite, mdp_composite
 from multiprocessing import Pool
 import torch
 from heuristic_policies import random_policy
@@ -18,11 +19,8 @@ def rollout(env, policy, nr_steps_per_rollout=np.inf):
     done = False
     total_reward = 0
     nr_steps = 0
-    actions = {action:0 for action in env.action_space}
     while not done:
         action = policy(env)
-        action_name = env.action_space[np.argmax(action)]
-        actions[action_name] += 1
         _, reward, done, _, _ = env.step(action)
         nr_steps += 1
         total_reward += reward
@@ -225,15 +223,16 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
             env.reset()
             if nr_arrivals is not None:
                 env.nr_arrivals = nr_arrivals
-            total_rewards.append(rollout(env, policy))
+            reward = rollout(env, policy)
+            total_rewards.append(reward)
             cycle_times.append(np.mean(list(env.cycle_times.values())))
         return total_rewards, cycle_times
     else:
         if nr_arrivals is None:
             nr_arrivals = env.nr_arrivals
-            
+        env.reset()
         with Pool() as pool:
-            result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=True))
+            result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), total=nr_rollouts, disable=False))
             total_rewards, mean_cycle_times = zip(*result)
         return total_rewards, mean_cycle_times
 
@@ -241,9 +240,15 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
 def evaluate_policy_single_rollout(args):
     env, policy, nr_arrivals = args
     if env.env_type == "smdp":
-        env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
+        if env.config_type == 'composite':
+            env_copy = smdp_composite.SMDP_composite(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
+        else:
+            env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
     elif env.env_type == "mdp":
-        env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
+        if env.config_type == 'composite':
+            env_copy = mdp_composite.MDP_composite(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
+        else:
+            env_copy = mdp.MDP(nr_arrivals, env.config_type, env.tau, track_cycle_times=env.track_cycle_times)
     else:
         raise ValueError("Unknown environment type.")
 

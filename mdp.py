@@ -90,11 +90,6 @@ class MDP:
             self.arrival_times = {}
             self.cycle_times = {}
 
-            self.processing_starts = {}
-            self.processing_times = {}
-            self.waiting_starts = {}
-            self.waiting_times = {}
-
         self.reporter = reporter
 
     def observation(self):
@@ -200,10 +195,6 @@ class MDP:
             self.arrival_times = {}
             self.cycle_times = {}
 
-            self.processing_starts = {}
-            self.processing_times = {}
-            self.waiting_starts = {}
-            self.waiting_times = {}
         self.episodic_reward = 0
     
     def get_state(self, rollout_length=None):
@@ -360,8 +351,6 @@ class MDP:
                     resource, task = action[0:-1], action[-1]
                     if self.waiting_cases[task]:
                         case_id = self.waiting_cases[task].pop(0)
-                        if self.track_cycle_times: 
-                            self.processing_starts[case_id][(task, resource)] = self.total_time
                         getattr(self, f'processing_{resource}').append((case_id, task))
                         if self.reporter:
                             self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
@@ -375,16 +364,9 @@ class MDP:
                 if self.track_cycle_times:
                     self.arrival_times[self.total_arrivals] = self.total_time
 
-                    self.waiting_starts[self.total_arrivals] = {}
-                    self.processing_starts[self.total_arrivals] = {}
-                    self.waiting_times[self.total_arrivals] = {}
-                    self.processing_times[self.total_arrivals] = {}
-
                 # sample the first task from the transition matrix
                 next_tasks = self.sample_next_task('Start')
                 for task in next_tasks:
-                    if self.track_cycle_times: 
-                        self.waiting_starts[self.total_arrivals][task] = self.total_time
                     self.waiting_cases[task].append(self.total_arrivals)
                 if self.reporter is not None:
                     self.reporter.callback(self.total_arrivals, 'start', '<start_event>', self.total_time)
@@ -392,9 +374,6 @@ class MDP:
             else:
                 resource, task = evolution[0:-1], evolution[-1]                
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]
-                if self.track_cycle_times: 
-                    self.waiting_times[case_id][task] = self.total_time - self.waiting_starts[case_id][task]
-                    self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)] 
                 next_tasks = self.sample_next_task(task, case_id)
                 if self.config_type == 'parallel':
                     self.partially_completed_cases.append(case_id)
@@ -402,8 +381,6 @@ class MDP:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:
                     if next_task and next_task != 'Complete':
-                        if self.track_cycle_times:
-                            self.waiting_starts[case_id][next_task] = self.total_time
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
                         if self.track_cycle_times:

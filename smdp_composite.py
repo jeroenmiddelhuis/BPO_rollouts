@@ -336,7 +336,7 @@ class SMDP_composite:
 
             events, probs = zip(*list(evolutions.items()))
             if self.crn:
-                evolution = self.crn.choice(events, w=probs)
+                evolution = self.crn.choice(events, weights=probs)
             else:
                 evolution = np.random.choice(events, p=probs)
 

@@ -3,6 +3,7 @@ import numpy as np
 import itertools
 from tqdm import tqdm
 import os
+import sys
 
 class ValueIteration:
     def __init__(self, env, gamma=1, theta=0.0001):
@@ -11,8 +12,8 @@ class ValueIteration:
         self.config_type = self.env.config_type
         self.gamma = gamma
         self.theta = theta
-        self.max_queue = 50
-        self.out_of_bounds_penalty = -10000
+        self.max_queue = 100
+        self.out_of_bounds_penalty = -100000
 
         #print('state space', self.state_space, type(self.state_space[0]))
         self.feature_ranges, self.state_space, self.all_states = self.determine_state_space()
@@ -198,9 +199,9 @@ class ValueIteration:
         done = False
         while not done:
             #print(f'Iteration {iteration} with delta {delta} and delta_delta {delta_delta}')
-            print(f'Iteration {iteration} for {self.config_type}')
-            print(f'Max_delta {np.round(max_delta, 2)} and min_delta {np.round(min_delta,2)}')
-            print(f'Difference: {np.round(max_delta - min_delta, 10)}')
+            print(f'Iteration {iteration} for {self.config_type}', flush=True)
+            print(f'Max_delta {np.round(max_delta, 2)} and min_delta {np.round(min_delta,2)}', flush=True)
+            print(f'Difference: {np.round(max_delta - min_delta, 10)}', flush=True)
             delta = 0
             max_delta = -np.inf
             min_delta = np.inf
@@ -285,7 +286,7 @@ class ValueIteration:
                     done = True
 
         return q, v, policy
-    
+ 
 def main():
     average_step_time_smdp = {
     'slow_server': 0.6700290812922858,
@@ -308,9 +309,10 @@ def main():
         'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
     }
 
-    tau_multiplier = 1.0
+    tau_multiplier = 0.5
 
-    for config in ['n_system']:
+    configs = [sys.argv[1]]
+    for config in configs:
     #for config in ['high_utilization', 'parallel', 'down_stream']:    
         tau = minimium_transition_time[config] * tau_multiplier
         if config == 'composite':
@@ -320,12 +322,14 @@ def main():
 
         gamma = 1
         theta = 0.001
-        vi = ValueIteration(env, gamma=gamma,theta=theta)
+        vi = ValueIteration(env, gamma=gamma, theta=theta)
         q, v, policy = vi.value_iteration()
-        directory = 'models/vi'
+        directory = f'models/vi/{config}'
         if not os.path.exists(directory):
             os.makedirs(directory)
-        np.save(f'{directory}/{config}.npy', policy)
+        np.save(f'{directory}/{config}_q.npy', q)
+        np.save(f'{directory}/{config}_v.npy', v)
+        np.save(f'{directory}/{config}_policy.npy', policy)
 
     """
         Observation examples:

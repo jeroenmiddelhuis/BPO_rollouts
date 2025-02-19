@@ -1,4 +1,4 @@
-import mdp, smdp
+import mdp, mdp_composite, smdp, smdp_composite
 import rollouts
 import policy_learner
 import sys, re
@@ -20,42 +20,50 @@ def learn(config_type,
           model_type = 'neural_network', 
           only_statistically_significant=False,
           tau=0.5):
-    
-    env = mdp.MDP(episode_length, config_type, tau=tau, crn=CRN(), track_cycle_times=False)    
-    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
-    pl.cache = fill_cache(env, pl)
+    if config_type == 'composite':
+        env = mdp_composite.MDP_composite(episode_length, config_type, tau=tau, crn=CRN(), track_cycle_times=False)
+        evaluation_env = smdp_composite.SMDP_composite(episode_length, config_type)
+    else:
+        env = mdp.MDP(episode_length, config_type, tau=tau, crn=CRN(), track_cycle_times=False)  
+        evaluation_env = smdp.SMDP(episode_length, config_type)  
     extension = '.pth'
+    pl = rollouts.learn_iteration(env, bootstrap_policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, model_type=model_type)
     pl.save(filename_without_extension + config_type + ".v1" + extension)
+    pl.save(filename_without_extension + config_type + ".best_policy" + extension)  
+    pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v1" + extension)
+    pl.cache = fill_cache(env, pl)
 
-    best_pl = pl.copy() # Copy the best policy so far
-    evaluation_env = smdp.SMDP(episode_length, config_type)
-    print('Evaluating policy..')
-    rewards, _ = rollouts.evaluate_policy(evaluation_env, best_pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=True)
+    print('Evaluating policy 1..')
+    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
     best_policy_reward = np.mean(rewards)
     print('Reward of policy version 1:', best_policy_reward)
     best_policy_v = 1
     print('\n')
-    for i in range(2, learning_iterations+1):        
+    for i in range(2, learning_iterations+1):
         pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
         pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
+        pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(i) + extension)
         pl.cache = fill_cache(env, pl)
         
         print(f'Evaluating new policy {i}..')
-        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=True)
+        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
         new_policy_reward = np.mean(rewards)
         print('Reward of policy version', i, ':', new_policy_reward)
         print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i}: {new_policy_reward}.")
         if new_policy_reward < best_policy_reward: # New policy is not better than the previous policy
             print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
-            # pl = best_pl.copy() # Revert to the previous policy
+            pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+            pl.cache = fill_cache(env, pl)
         else:
             print(f"Policy version {best_policy_v} improved, continuing with policy version {i}.")
-            best_pl = pl.copy()
             best_policy_reward = new_policy_reward
             best_policy_v = i
+            pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+            pl.cache = fill_cache(env, pl)
         print('\n')
 
-    best_pl.save(filename_without_extension + config_type + ".best_policy" + extension)           
+    pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+    pl.save(filename_without_extension + config_type + ".best_policy" + extension)            
 
 
 def fill_cache(env, policy):
@@ -116,7 +124,10 @@ def show_policy(filename):
         print(observation, pl.predict(observation, [False, True, True, False]))
     
 def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, results_dir=None, model_type=None):
-    env = mdp.MDP(episode_length, config_type, tau=0.25)
+    if config_type == 'composite':
+        env = mdp_composite.MDP_composite(episode_length, config_type)
+    else:
+        env = mdp.MDP(episode_length, config_type)
     pl = policy_learner.PolicyLearner.load(filename, model_type)
     version_number = re.search(r'v(\d+)', filename).group(1)
     average_reward = rollouts.evaluate_policy(env, pl.policy, nr_rollouts)
@@ -222,23 +233,30 @@ def main():
         'slow_server': 1 / (1/2.0 + 1/1.4 + 1/1.8),
         'low_utilization': 1 / (1/2.0 + 1/1.4 + 1/1.4),
         'high_utilization': 1 / (1/2.0 + 1/1.8 + 1/1.8),
-        'n_system': 1 / (1/2.0 + 1/2.0 + 1/3),
+        'n_system': 1 / (1/2.0 + 1/2.0 + 1/3.0),
         'parallel': 1 / (1/2.0 + 1/1.6 + 1/1.6),
         'down_stream': 1 / (1/2.0 + 1/1.6 + 1/1.6),
-        'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0)
+        'single_activity': 1/ (1/2.0 + 1/1.8 + 1/10.0),
+        'composite': 1 / (1/2.0 + 1/1.4 + 1/1.8 
+                                + 1/1.4 + 1/1.4 
+                                + 1/1.8 + 1/1.8
+                                + 1/2.0 + 1/3.0
+                                + 1/1.6 + 1/1.6 
+                                + 1/1.6 + 1/1.6)
     }
 
     nr_rollouts = 100
-    nr_steps_per_rollout = 50  
-    config_type = 'slow_server'#sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
+    nr_steps_per_rollout = 100
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'slow_server'
     model_type = 'neural_network'
-    learning_iterations = 10
+    learning_iterations = 20
 
-    tau_multiplier = 1.0
+    tau_multiplier = 0.5
     tau = minimium_transition_time[config_type] * tau_multiplier
     mdp_steps = int(np.ceil((nr_steps_per_rollout * average_step_time_smdp[config_type] / tau)))
 
     dir = f".//models//pi//mdp//{config_type}//"
+    #dir = f".//models//pi//tuning//{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}//"
     if not os.path.exists(dir):
         os.makedirs(dir, exist_ok=True)
 
@@ -252,7 +270,7 @@ def main():
         dir,
         learning_iterations=learning_iterations,
         episode_length=2500, # nr_cases
-        nr_states_to_explore=50,
+        nr_states_to_explore=5000,
         nr_rollouts=nr_rollouts,
         nr_steps_per_rollout=mdp_steps,
         model_type=model_type,

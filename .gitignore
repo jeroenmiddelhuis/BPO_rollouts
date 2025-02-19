@@ -2,6 +2,7 @@
 /models
 test.csv
 settings.json
-/results
+/results_mean
+/results_tuning
 /.vscode
 /data

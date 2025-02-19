@@ -8,8 +8,7 @@ from sb3_contrib import MaskablePPO
 import copy as cp
 
 
-class PolicyLearner():
-    
+class PolicyLearner():    
     CACHE_SIZE = 50000
 
     def __init__(self):
@@ -125,14 +124,9 @@ class PolicyLearner():
             return cached_value
 
         # No value has been found in the cache, calculate the prediction
-        if isinstance(self.model, nn.Module):
-            observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
-            action_probs = self.model(observation)[0]
-            action_probs = action_probs.detach().numpy()
-        elif isinstance(self.model, MaskablePPO):
-            action_probs = self.model.predict(observation, action_masks=action_mask)[0]
-        else:
-            raise ValueError("Unsupported model type")
+        observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+        action_probs = self.model(observation)[0]
+        action_probs = action_probs.detach().numpy()
 
         self.cache_misses += 1
         if len(self.cache) >= self.CACHE_SIZE:
@@ -151,19 +145,29 @@ class PolicyLearner():
         return self.predict(observation, action_mask)
     
     def save(self, filename):
-        if filename.endswith('.pth'):
-            torch.save(self.model, filename)
-        elif filename.endswith('.json'):
-            self.model.save_model(filename)
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'criterion_state_dict': self.criterion.state_dict(),
+        }, filename)
 
     def load(filename):
-        if filename.endswith('.pth'):
-            self = PolicyLearner()
-            self.model = torch.load(filename, weights_only=False)
-            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-            self.criterion = nn.CrossEntropyLoss()
-        elif filename.endswith('.zip'):
-            self.model = MaskablePPO.load(filename)
+        self = PolicyLearner()
+        checkpoint = torch.load(filename, weights_only=True)
+        input_dim = checkpoint['model_state_dict']['0.weight'].shape[1]
+        output_dim = checkpoint['model_state_dict']['4.weight'].shape[0]
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim),
+            nn.Softmax(dim=-1)
+        )
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.criterion = nn.CrossEntropyLoss()
         return self
 
     def print_cache_effeciency(self):
@@ -177,7 +181,6 @@ class PolicyLearner():
         learner.model = cp.deepcopy(self.model)
         learner.optimizer = optim.Adam(learner.model.parameters(), lr=0.001)
         learner.criterion = nn.CrossEntropyLoss()
-        print('Model successfully copied', flush=True)
         return learner
 
 class ValueIterationPolicy():
@@ -234,8 +237,39 @@ class ValueIterationPolicy():
         if self.env.config_type != 'single_activity':
             if observation[-2] > self.max_queue:
                 observation[-2] = self.max_queue
-        
         return observation
+
+class PPOPolicy():
+    def __init__(self):
+        self.model = None
+
+    def normalize_observation(self, observation):
+        if len(observation) == 3: # single_activity
+            observation[-1] = np.minimum(1.0, observation[-1] / 100.0)
+        elif len(observation) <= 8: # 2 activity scenarios
+            observation[-2:] = np.minimum(1.0, observation[-2:] / 100.0)
+        else: # composite model
+            observation[-12:] = np.minimum(1.0, observation[-12:] / 100.0)
+        return observation
+
+    def load(filename):
+        self = PPOPolicy()
+        self.model = MaskablePPO.load(filename)
+        return self
+
+    def policy(self, env):
+        """
+        Is the policy interpretation of the model, 
+        i.e. a function that takes an environment and returns an action for the observation of the environment.
+        """
+        observation = env.observation()
+        observation = self.normalize_observation(np.array(observation, dtype=float))
+        action_mask = env.action_mask()
+        action, _ = self.model.predict(observation, action_masks=action_mask)
+        action = int(action)
+        action_array = [0] * len(env.action_space)
+        action_array[action] = 1
+        return action_array
 
 
 if __name__ == "__main__":
@@ -246,9 +280,9 @@ if __name__ == "__main__":
 
 
     ######### Check if the models are different
-    pl2 = PolicyLearner.load('./models/pi/mdp/single_activity/single_activity.best_policy.pth')
+    pl2 = PolicyLearner.load('./models/pi/mdp/low_utilization/low_utilization.best_policy.pth')
     for i in range(1, 11):
-        pl = PolicyLearner.load(f'./models/pi/mdp/single_activity/single_activity.v{i}.pth')    
+        pl = PolicyLearner.load(f'./models/pi/mdp/low_utilization/low_utilization.v{i}.pth')    
 
         # Compare if the models are different
         are_models_different = False

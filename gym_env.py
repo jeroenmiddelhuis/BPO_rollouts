@@ -28,23 +28,17 @@ class Environment(Env):
         return observation
 
     def reset(self, seed=None):
-        # if sum(self.selected_actions.values()) > 0:
-        #     print('Episode over')
-        #     print('Total reward:', self.episode_reward)
-        #     print("Final state:", self.env.observation())
-        #     print("Selected actions:", self.selected_actions)
-        #     print("Number of actions:", sum(self.selected_actions.values()))
-        #     print("Average reward per action:", self.episode_reward / sum(self.selected_actions.values()))
-        # print(self.env.episodic_reward, self.env.nr_arrivals)
-        print('------------------------------------------')
-        print('Episode over')
-        print('Episode reward:', self.episode_reward)
-        print('Number of cases:', self.env.total_arrivals)
-        print('Completed cases:', len(self.env.cycle_times))
-        print('Uncompleted cases:', self.env.total_arrivals - len(self.env.cycle_times))
-        print('Average cycle time:', np.mean(list(self.env.cycle_times.values())))
-        print('------------------------------------------')
-        print('\n')
+        if len(self.env.cycle_times) > 0:
+            print('------------------------------------------')
+            print('Episode over')
+            print('Episode reward:', self.episode_reward)
+            print('Number of cases:', self.env.total_arrivals)
+            print('Completed cases:', len(self.env.cycle_times))
+            print('Uncompleted cases:', self.env.total_arrivals - len(self.env.cycle_times))
+            print('Average cycle time:', np.mean(list(self.env.cycle_times.values())))
+            print('Selected actions:', self.selected_actions)
+            print('------------------------------------------')
+            print('\n')
 
         self.env.reset()
         
