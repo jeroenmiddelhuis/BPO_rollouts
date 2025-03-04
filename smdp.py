@@ -361,24 +361,27 @@ class SMDP:
                 resource, task = evolution[0:2], evolution[2]
                 case_id = getattr(self, f'processing_{resource}').pop(0)[0]
                 next_tasks = self.sample_next_task(task, case_id)
-                if self.config_type == 'parallel':
-                    self.partially_completed_cases.append(case_id)
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:
                     if next_task and next_task != 'Complete':
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
-                        if self.track_cycle_times:
-                            self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
-                        if self.reward_function == 'case_cycle_time':                            
-                            reward += -self.cycle_times[case_id]
-                        elif self.reward_function == 'inverse_case_cycle_time':
-                            reward += 1/(1 + self.cycle_times[case_id])
-                        elif self.reward_function == 'case':
-                            reward += 1
-                        if self.reporter:
-                            self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
+                        # If self.config_type is not parallel, the case is completed
+                        # Otherwise, we must check if the other task is also completed
+                        if self.config_type != 'parallel' or case_id in self.partially_completed_cases:
+                            if self.track_cycle_times:
+                                self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
+                            if self.reward_function == 'case_cycle_time':                            
+                                reward += -self.cycle_times[case_id]
+                            elif self.reward_function == 'inverse_case_cycle_time':
+                                reward += 1/(1 + self.cycle_times[case_id])
+                            elif self.reward_function == 'case':
+                                reward += 1
+                            if self.reporter:
+                                self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
+                if self.config_type == 'parallel':
+                    self.partially_completed_cases.append(case_id)            
             if self.reward_function == 'AUC':
                 reward += time * -len(unique_active_cases)
             self.episodic_reward += reward
@@ -390,15 +393,15 @@ if __name__ == '__main__':
     avg_cycle_times = []
     total_rewards = []
     for i in range(nr_replications):
-        #reporter = EventLogReporter(f"./data/slow_server_log_greedy_{i+1}.txt")
-        reporter = ProcessReporter()
+        reporter = EventLogReporter(f"./data/slow_server_log_fifo_{i+1}.txt")
+        #reporter = ProcessReporter()
         env = SMDP(2500, 'slow_server', reporter)
 
         done = False
         steps = 0
         total_reward = 0
         while not done:
-            action = greedy_policy(env)
+            action = fifo_policy(env)
             state, reward, done, _, _ = env.step(action)
             total_reward += reward
             time = env.total_time
@@ -406,13 +409,9 @@ if __name__ == '__main__':
         avg_cycle_times.append(np.mean(list(env.cycle_times.values())))
         total_rewards.append(total_reward)
         print(np.mean(list(env.cycle_times.values())), total_reward)
-        for task_type in env.task_types:
-            print(f'Mean waiting time for task {task_type}: {np.mean([env.waiting_times[case_id][task_type] for case_id in env.waiting_times if task_type in env.waiting_times[case_id]])}')
-            for resource in env.resource_pools[task_type]:
-                print(f'Mean processing time for task {task_type} with resource {resource}: {np.mean([env.processing_times[case_id][(task_type, resource)] for case_id in env.processing_times if (task_type, resource) in env.processing_times[case_id]])}')
         
         reporter.close()
-        reporter.print_result()
+        #reporter.print_result()
         print('\n')
     
     # print mean and 95% confidence interval of the average cycle time and rewards

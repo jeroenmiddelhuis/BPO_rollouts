@@ -35,7 +35,7 @@ def learn(config_type,
     
     
     print('Evaluating policy 1..')
-    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
     best_policy_reward = np.mean(rewards)
     print('Reward of policy version 1:', best_policy_reward)
     best_policy_v = 1
@@ -48,7 +48,7 @@ def learn(config_type,
 
         print(f'Evaluating new policy {i}..')
         # Evaluate the new policy
-        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
         new_policy_reward = np.mean(rewards)
         print(f'Reward of policy version {i}:', new_policy_reward)
         print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i}: {new_policy_reward}.")
@@ -65,15 +65,18 @@ def learn(config_type,
         print('\n')
 
     pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
-    pl.save(filename_without_extension + config_type + ".best_policy" + extension)           
+    pl.save(filename_without_extension + config_type + ".best_policy" + extension)
 
 
 def fill_cache(env, policy):
-    _, frequent_states, _ =  determine_state_space(env)
-    frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
-    probabilities = policy.model(frequent_states).detach()
-    cache = {tuple(state.detach().numpy()): _probabilities.detach().numpy() for state, _probabilities in zip(frequent_states, probabilities)}
-    return cache
+    if env.config_type != 'composite':
+        _, frequent_states, _ =  determine_state_space(env)
+        frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
+        probabilities = policy.model(frequent_states).detach()
+        cache = {tuple(state.detach().numpy()): _probabilities.detach().numpy() for state, _probabilities in zip(frequent_states, probabilities)}
+        return cache
+    else:
+        return {}
 
 def determine_state_space(env, max_queue=30):
     def check_feasible_observation(observation):
@@ -173,7 +176,10 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
                 print('FIFO policy:', average_reward)
 
 def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, results_dir=None, env_type='smdp', results_string = ''):
-    env = smdp.SMDP(episode_length, config_type)
+    if config_type == 'composite':
+        env = smdp_composite.SMDP_composite(episode_length)
+    else:
+        env = smdp.SMDP(episode_length, config_type)
     pl_name = None
     if pl == greedy_policy:
         pl_name = 'spt'
@@ -201,7 +207,7 @@ def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, 
     with open(results_file_path, 'w') as results_file:
         results_file.write(f"reward,cycle_time\n")
         if pl_name in ['pi', 'vi']:
-            rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500, parallel=True)
+            rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500, parallel=False)
         else:
             rewards, cycle_times = rollouts.evaluate_policy(env, pl, nr_rollouts, nr_arrivals=2500, parallel=False)
         print(f'Mean reward: {np.mean(rewards)}, std reward: {np.std(rewards)}')
@@ -260,12 +266,11 @@ def main():
     """
     Training of the policies
     """
-
     nr_rollouts = 100
     nr_steps_per_rollout = 100
     config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
     model_type = 'neural_network'
-    learning_iterations = 20
+    learning_iterations = 3
 
     dir = f".//models//pi//smdp//{config_type}//"
     if not os.path.exists(dir):
@@ -280,7 +285,7 @@ def main():
         dir,
         learning_iterations=learning_iterations,
         episode_length=2500, # nr_cases
-        nr_states_to_explore=5000,
+        nr_states_to_explore=20000,
         nr_rollouts=nr_rollouts,
         nr_steps_per_rollout=nr_steps_per_rollout,
         model_type=model_type)
@@ -306,9 +311,9 @@ def main():
     #             env_types.append('mdp')
     #         for env_type in env_types:
 
-    # config_type = 'single_activity'
+    # config_type = 'composite'
     # policy = 'pi'
-    # env_type = 'mdp'
+    # env_type = 'smdp'
 
     # print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
     # results_dir = f".//results//{policy}//"
@@ -328,13 +333,13 @@ def main():
     #     filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
     #     pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
     # elif policy == 'pi':
-    #     filename = f"./models/pi/{env_type}/{config_type}/{config_type}.v{i}.pth"
+    #     filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.pth"
     #     pl = policy_learner.PolicyLearner.load(filename)
     #     print('Filling cache..')
     #     pl.cache = fill_cache(env, pl)
     #     print(f'Cache filled with {len(pl.cache)} state-action pairs.')
 
-    # evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300,
+    # evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=1,
     #                 results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
 
 

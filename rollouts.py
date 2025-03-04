@@ -19,13 +19,19 @@ def rollout(env, policy, nr_steps_per_rollout=np.inf):
     done = False
     total_reward = 0
     nr_steps = 0
+    #actions = {}
     while not done:
         action = policy(env)
+        # action_label = env.action_space[np.argmax(action)]
+        # if action_label not in actions:
+        #     actions[action_label] = 0
+        # actions[action_label] += 1
         _, reward, done, _, _ = env.step(action)
         nr_steps += 1
         total_reward += reward
         if nr_steps >= nr_steps_per_rollout:
             done = True
+    #print(actions)
     return total_reward
 
 
@@ -89,9 +95,13 @@ def find_learning_sample(env, policy, nr_rollouts_per_action, nr_steps_per_rollo
     if observation is None:  # if we can't learn anything, we return None.
         return None
     means = {action: np.mean(rewards[action]) for action in possible_actions}
+    print('Observation:', observation)
+    print('Possible actions:', [env.action_space[np.argmax(p_action)] for p_action in possible_actions])
+    print('Means:', {env.action_space[np.argmax(action)]: mean for action, mean in means.items()})
     best_action = max(means, key=means.get)
+    print('Best action:', env.action_space[np.argmax(best_action)])
     if not only_statistically_significant:  # if we don't care about statistical significance, we just return the best action.
-        return (observation, best_action)
+        return (observation, best_action)#, {env.action_space[np.argmax(action)]: mean for action, mean in means.items()}
     # We use a t-test to check if the best action is significantly better than the others.
     # We use a one-sided test, because we are only interested in the case where the best action is better.
     better_than_others = True
@@ -140,7 +150,10 @@ def random_states(env, policy, nr_states):
             # Add more case arrivals to the state by setting rollout_length
             # Since we use a fixed number of steps per rollout, we set the rollout_length to a high number.
             # This ensure we can simulate for an infitie horizon.
-            sampled_states.append(env.get_state(rollout_length=500))
+            sampled_states.append(env.get_state(rollout_length=10000))
+            # print('Observation', env.observation())
+            # print('Action mask:', env.action_mask())
+            # print('Action labels:', [env.action_space[i] for i, mask in enumerate(env.action_mask()) if mask])
     return sampled_states
 
 def process_state(args):

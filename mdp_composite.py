@@ -10,7 +10,6 @@ class MDP_composite:
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
-        self.reward_function = reward_function
         self.crn = crn
         self.track_cycle_times = track_cycle_times
         self.is_stopping_criteria_time = is_stopping_criteria_time
@@ -65,7 +64,7 @@ class MDP_composite:
         self.double_assignments += [(ass1, ass2) 
                                     for ass1 in ['r9j', 'r10i', 'r10j'] 
                                     for ass2 in ['r11k', 'r12k', 'r11l', 'r12l']]
-        self.double_assignments += [('r11k', 'r12l'), ('r11l', 'r12k')]
+        self.double_assignments += [('r11k', 'r12l')] # ('r11l', 'r12k') not needed because of symmetrical actions
 
         self.action_space += self.double_assignments
         self.action_space += ['postpone', 'do_nothing']
@@ -149,10 +148,10 @@ class MDP_composite:
                                           and assignments_possible[self.assignment_indices['r2a']] 
                                           and sum(assignments_possible) == 2))
         else:
-            postpone_possible = any(assignments_possible)
-        do_nothing_possible = not postpone_possible
-        
-        return assignments_possible + double_assignments_possible + [postpone_possible, do_nothing_possible]
+            postpone_possible = any(assignments_possible) and not all(is_available_resources)
+        mask = assignments_possible + double_assignments_possible + [postpone_possible]
+        do_nothing_possible =  not any(mask)
+        return mask + [do_nothing_possible]
 
     def reset(self):
         if self.crn:

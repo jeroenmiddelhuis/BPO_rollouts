@@ -34,7 +34,7 @@ def learn(config_type,
     pl.cache = fill_cache(env, pl)
 
     print('Evaluating policy 1..')
-    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
     best_policy_reward = np.mean(rewards)
     print('Reward of policy version 1:', best_policy_reward)
     best_policy_v = 1
@@ -46,7 +46,7 @@ def learn(config_type,
         pl.cache = fill_cache(env, pl)
         
         print(f'Evaluating new policy {i}..')
-        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=300, nr_arrivals=2500, parallel=True)
+        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
         new_policy_reward = np.mean(rewards)
         print('Reward of policy version', i, ':', new_policy_reward)
         print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i}: {new_policy_reward}.")
@@ -67,11 +67,14 @@ def learn(config_type,
 
 
 def fill_cache(env, policy):
-    _, frequent_states, _ =  determine_state_space(env)
-    frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
-    probabilities = policy.model(frequent_states).detach()
-    cache = {tuple(state.detach().numpy()): _probabilities.detach().numpy() for state, _probabilities in zip(frequent_states, probabilities)}
-    return cache
+    if env.config_type != 'composite':
+        _, frequent_states, _ =  determine_state_space(env)
+        frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
+        probabilities = policy.model(frequent_states).detach()
+        cache = {tuple(state.detach().numpy()): _probabilities.detach().numpy() for state, _probabilities in zip(frequent_states, probabilities)}
+        return cache
+    else:
+        return {}
 
 def determine_state_space(env, max_queue=30):
     def check_feasible_observation(observation):
@@ -250,7 +253,7 @@ def main():
     nr_steps_per_rollout = 100
     config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
     model_type = 'neural_network'
-    learning_iterations = 20
+    learning_iterations = 3
 
     tau_multiplier = 0.5
     tau = minimium_transition_time[config_type] * tau_multiplier
@@ -271,7 +274,7 @@ def main():
         dir,
         learning_iterations=learning_iterations,
         episode_length=2500, # nr_cases
-        nr_states_to_explore=5000,
+        nr_states_to_explore=20000,
         nr_rollouts=nr_rollouts,
         nr_steps_per_rollout=mdp_steps,
         model_type=model_type,

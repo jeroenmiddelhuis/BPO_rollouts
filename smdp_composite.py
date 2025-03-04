@@ -67,7 +67,7 @@ class SMDP_composite:
         self.double_assignments += [(ass1, ass2) 
                                     for ass1 in ['r9j', 'r10i', 'r10j'] 
                                     for ass2 in ['r11k', 'r12k', 'r11l', 'r12l']]
-        self.double_assignments += [('r11k', 'r12l'), ('r11l', 'r12k')]
+        self.double_assignments += [('r11k', 'r12l')] # ('r11l', 'r12k') not needed because of symmetrical actions
 
         self.action_space += self.double_assignments
         self.action_space += ['postpone', 'do_nothing']
@@ -145,10 +145,10 @@ class SMDP_composite:
                                           and assignments_possible[self.assignment_indices['r2a']] 
                                           and sum(assignments_possible) == 2))
         else:
-            postpone_possible = any(assignments_possible)
-        do_nothing_possible = not postpone_possible
-        
-        return assignments_possible + double_assignments_possible + [postpone_possible, do_nothing_possible]
+            postpone_possible = any(assignments_possible) and not all(is_available_resources)
+        mask = assignments_possible + double_assignments_possible + [postpone_possible]
+        do_nothing_possible =  not any(mask)
+        return mask + [do_nothing_possible]
 
     def reset(self):
         if self.crn:
@@ -362,11 +362,6 @@ class SMDP_composite:
                 if self.track_cycle_times:
                     self.processing_times[case_id][(task, resource)] = self.total_time - self.processing_starts[case_id][(task, resource)]
                 next_tasks = self.sample_next_task(task, case_id)
-                # completion the parallel task adds to list of partially completed cases
-                # if task i or j has been completed previously, the case may now continue
-                if task == 'i' or task == 'j': 
-                    self.partially_completed_cases.append(case_id)
-
                 if self.reporter:
                     self.reporter.callback(case_id, task, '<task:complete>', self.total_time, resource)
                 for next_task in next_tasks:                    
@@ -374,7 +369,7 @@ class SMDP_composite:
                         if self.track_cycle_times:
                             self.waiting_starts[case_id][next_task] = self.total_time
                         self.waiting_cases[next_task].append(case_id)
-                    elif next_task == 'Complete':
+                    elif next_task == 'Complete' and case_id in self.partially_completed_cases:
                         if self.track_cycle_times:
                             self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
                         if self.reward_function == 'case_cycle_time':                            
@@ -385,6 +380,10 @@ class SMDP_composite:
                             reward += 1
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
+                # completion the parallel task adds to list of partially completed cases
+                # if task i or j has been completed previously, the case may now continue
+                if task == 'i' or task == 'j': 
+                    self.partially_completed_cases.append(case_id)
             if self.reward_function == 'AUC':
                 reward += time * -len(unique_active_cases)
             self.episodic_reward += reward
@@ -446,7 +445,7 @@ if __name__ == '__main__':
         time_iter = 1
         #reporter = EventLogReporter("smdp_log.txt")
         reporter = ProcessReporter()
-        env = SMDP_composite(2500, 'composite')
+        env = SMDP_composite(2500, 'composite', reward_function='case')
 
         done = False
         steps = 0

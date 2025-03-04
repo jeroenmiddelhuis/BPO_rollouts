@@ -31,8 +31,9 @@ lr = 3e-05
 n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
-config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'parallel'
 env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
+
 reward_function = sys.argv[3] if len(sys.argv) > 3 else 'case'
 is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else 'False'
 if config_type == 'composite':
@@ -44,7 +45,7 @@ else:
     is_stopping_criteria_time = False
     stopping_criteria = 'case_limit'
 
-test_mode = False
+test_mode = True
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -190,12 +191,13 @@ if __name__ == '__main__':
         Evaluation of the learned policies
         """
 
-        print(config_type, env_type)
+        
+        for config_type in ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'down_stream', 'single_activity']:
+            print(config_type, env_type)
+            filename = f"./models/ppo/{env_type}/{config_type}/{reward_function}/{stopping_criteria}/best_model.zip"
+            os.makedirs(f"./results/ppo/", exist_ok=True)
+            results_dir = f"./results/ppo/ppo_{config_type}_{env_type}_{reward_function}_{stopping_criteria}.txt"
 
-        filename = f"./models/ppo//{env_type}/{config_type}/{reward_function}/{stopping_criteria}/best_model.zip"
-        os.makedirs(f"./results/ppo/", exist_ok=True)
-        results_dir = f"./results/ppo/ppo_{config_type}_{env_type}_{reward_function}_{stopping_criteria}.txt"
-
-        evaluate_policy(filename, config_type, episode_length=2500, nr_rollouts=300, 
-                        results_dir=results_dir)
-        print('\n')        
+            evaluate_policy(filename, config_type, episode_length=2500, nr_rollouts=300, 
+                            results_dir=results_dir)
+            print('\n')        

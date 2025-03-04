@@ -55,7 +55,15 @@ class EventLogReporter:
             days=time) if self.timeunit == TimeUnit.DAYS else None)
 
     def callback(self, case_id, event_name, event_lifecycle, time, resource=""):
-        if event_lifecycle == "<task:start>":
+        if event_lifecycle == "<start_event>":
+            self.logfile.write(str(case_id) + self.sep)
+            self.logfile.write(event_name + self.sep)
+            self.logfile.write(self.sep)
+            self.logfile.write(self.displace(time).strftime(self.time_format) + self.sep)
+            self.logfile.write(self.displace(time).strftime(self.time_format))
+            self.logfile.write("\n")
+            self.logfile.flush()
+        elif event_lifecycle == "<task:start>":
             self.task_start_times[(case_id, event_name)] = time
         elif event_lifecycle == "<task:complete>":
             if (case_id, event_name) in self.task_start_times.keys():

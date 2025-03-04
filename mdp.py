@@ -383,12 +383,12 @@ class MDP:
                     if next_task and next_task != 'Complete':
                         self.waiting_cases[next_task].append(case_id)
                     elif next_task == 'Complete':
-                        if self.track_cycle_times:
-                            self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]                      
-                        if self.reward_function == 'case_cycle_time':                            
-                            reward += -self.cycle_times[case_id]
-                        elif self.reward_function == 'inverse_case_cycle_time':
-                            reward += 1/(1 + self.cycle_times[case_id])
+                        # if self.track_cycle_times:
+                        #     self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]                      
+                        # if self.reward_function == 'case_cycle_time':                            
+                        #     reward += -self.cycle_times[case_id]
+                        # elif self.reward_function == 'inverse_case_cycle_time':
+                        #     reward += 1/(1 + self.cycle_times[case_id])
                         if self.reporter:
                             self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
             self.episodic_reward += reward
