@@ -56,11 +56,10 @@ Where `config_type` can be:
 - Baseline heuristic policies for comparison
 - Evaluation tools and metrics
 
-## Project Structure
+## Project Folders
 
 - `models/` - Saved policy models
 - `results/` - Evaluation results
--
 
 ## License
 
