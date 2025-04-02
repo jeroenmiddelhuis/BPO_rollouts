@@ -268,7 +268,7 @@ def main():
     """
     nr_rollouts = 100
     nr_steps_per_rollout = 100
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
     model_type = 'neural_network'
     learning_iterations = 3
 

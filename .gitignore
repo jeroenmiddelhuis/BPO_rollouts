@@ -1,5 +1,9 @@
 /__pycache__
-/models
+*.v[0-9]*
+*.tfevents.*
+*monitor.csv
+*progress.csv
+*final_model.zip
 test.csv
 settings.json
 /results_mean

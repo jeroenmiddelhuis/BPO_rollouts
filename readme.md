@@ -5,11 +5,11 @@ The repository contains the code to train policies for Continuous-Time Markov De
 
 ## Project Structure
 
-- `__main__.py` - Main entry point for training and evaluating policies
+- `__main__.py` / `__main__mdp.py` - Main entry point for training and evaluating policies
 - `smdp.py` / `mdp.py` - Core SMDP/MDP environment implementations 
 - `policy_learner.py` - Policy learning algorithms
 - `rollouts.py` - Rollout-based learning utilities
-- `heuristic_policies.py` - Implementation of baseline policies (FIFO, Random, Greedy, Threshold)
+- `heuristic_policies.py` - Implementation of baseline policies (FIFO, Random, Greedy)
 
 ## Installation
 
@@ -27,9 +27,14 @@ pip install -r requirements.txt
 
 ## Usage
 
-Train a policy:
+Train a policy for the CTMDP:
 ```bash
 python __main__.py <config_type>
+```
+
+or train a policy for the MDP:
+```bash
+python __main__mdp.py <config_type>
 ```
 
 Where `config_type` can be:
@@ -44,7 +49,7 @@ Where `config_type` can be:
 
 ## Key Features
 
-- Semi-Markov Decision Process (SMDP) modeling of business processes
+- Continuous-Time Markov Decision Process (referred to as SMDP) and MDP modeling of business processes
 - Policy learning through rollout-based methods
 - Multiple environment configurations for different process scenarios
 - Neural network and value iteration based policy models
@@ -54,17 +59,8 @@ Where `config_type` can be:
 ## Project Structure
 
 - `models/` - Saved policy models
-- `results/` - Evaluation results 
-- `data/` - Training data and configurations
-- `.vscode/` - VSCode configuration files
-
-## Testing
-
-Run tests using pytest:
-
-```bash
-pytest test_*.py
-```
+- `results/` - Evaluation results
+-
 
 ## License
 
