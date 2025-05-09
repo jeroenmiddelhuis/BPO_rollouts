@@ -105,8 +105,13 @@ class PolicyLearner():
             return action_mask
         observation = np.array(observation, dtype=float)
         observation = self.normalize_observation(observation)
-        action_probs = self.predict_with_cache(observation, action_mask)        
+        action_probs = self.predict_with_cache(observation, action_mask)   
+        print(action_probs)
+        print(action_mask)
+        print("sum of action probs:", sum(action_probs))
         action_probs = action_probs * action_mask
+        print(action_probs)
+        print("sum of action probs:", sum(action_probs))
         action = [0] * len(action_probs)
         action[np.argmax(action_probs)] = 1
         return action

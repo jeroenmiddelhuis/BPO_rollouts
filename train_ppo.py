@@ -31,10 +31,10 @@ lr = 3e-05
 n_steps = 25600 # Number of steps per update
 time_steps = 1e7 # Total timesteps for training
 #config_type = ['n_system', 'slow_server', 'low_utilization', 'high_utilization', 'parallel', 'down_stream', 'single_activity']
-config_type = sys.argv[1] if len(sys.argv) > 1 else 'parallel'
+config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
 env_type = sys.argv[2] if len(sys.argv) > 2 else 'smdp'
 
-reward_function = sys.argv[3] if len(sys.argv) > 3 else 'case'
+reward_function = sys.argv[3] if len(sys.argv) > 3 else 'AUC'
 is_stopping_criteria_time = sys.argv[4] if len(sys.argv) > 4 else 'False'
 if config_type == 'composite':
     time_steps = 2e7
@@ -45,7 +45,7 @@ else:
     is_stopping_criteria_time = False
     stopping_criteria = 'case_limit'
 
-test_mode = True
+test_mode = False
 
 net_arch = dict(pi=[nr_neurons for _ in range(nr_layers)], vf=[nr_neurons for _ in range(nr_layers)])
 
@@ -170,9 +170,9 @@ if __name__ == '__main__':
         gym_env_eval = Environment(eval_env)  # Initialize env
         gym_env_eval = Monitor(gym_env_eval, log_dir)
         eval_callback = EvalPolicyCallback(check_freq=10*int(n_steps), nr_evaluations=30, log_dir=log_dir, eval_env=gym_env_eval)
-        best_reward_callback = SaveOnBestTrainingRewardCallback(check_freq=int(n_steps), log_dir=log_dir)
+        #best_reward_callback = SaveOnBestTrainingRewardCallback(check_freq=int(n_steps), log_dir=log_dir)
 
-        model.learn(total_timesteps=int(time_steps), callback=eval_callback)#
+        model.learn(total_timesteps=int(time_steps))#, callback=eval_callback)#
 
         # For episode rewards, use env.get_episode_rewards()®
         # env.get_episode_times() returns the wall clock time in seconds of each episode (since start)
@@ -181,7 +181,7 @@ if __name__ == '__main__':
         # print(env.get_episode_rewards())
         #     print(env.get_episode_times())
 
-        model.save(f'{log_dir}/final_model')
+        #model.save(f'{log_dir}/final_model')
 
         #import matplotlib.pyplot as plt
         #plot_results([log_dir], time_steps, results_plotter.X_TIMESTEPS, f"{model_name}")

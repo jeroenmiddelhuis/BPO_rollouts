@@ -6,8 +6,7 @@ import random
 class SMDP_composite:
     def __init__(self, nr_arrivals, config_type='composite', 
                  reporter=None, crn=None, reward_function='AUC', 
-                 track_cycle_times=True, is_stopping_criteria_time=False,
-                 arrival_rate_multiplier=1):
+                 track_cycle_times=True, is_stopping_criteria_time=False):
         # Read the config file and set the process parameters
         self.config_type = config_type
         self.reward_function = reward_function
@@ -16,7 +15,6 @@ class SMDP_composite:
         # When setting the state, the cycle times cannot be tracked so we need to disable it then
         self.track_cycle_times = track_cycle_times
         self.is_stopping_criteria_time = is_stopping_criteria_time
-        self.arrival_rate_multiplier = arrival_rate_multiplier
         self.env_type = 'smdp'
 
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt"), "r") as f:
@@ -29,7 +27,7 @@ class SMDP_composite:
         self.task_types_all = [task for task in list(config['task_types'])] + ['Complete']
         self.resources = list(config['resources'])
         self.resource_pools = config['resource_pools']
-        self.arrival_rate = (1/config['mean_interarrival_time']) * self.arrival_rate_multiplier
+        self.arrival_rate = 1/config['mean_interarrival_time']
         self.transitions = config['transitions']
 
         self.evolution_rates = {f'r{i}{task}': 1/self.resource_pools[task][f'r{i}'][0] 
@@ -47,7 +45,31 @@ class SMDP_composite:
         self.state_space = ([f'is_available_{r}' for r in self.resources] + 
                             [f'assigned_{assignment}' for assignment in self.assignments] + # r9 can only be assigned to one task
                             [f'waiting_{task}' for task in self.task_types])
+        
+        # double actions
+        # high utilization
+        self.double_assignments =  [(ass1, ass2) 
+                                    for ass1 in ['r1a', 'r2a', 'r1b', 'r2b'] 
+                                    for ass2 in ['r3c', 'r4c']]
+        # slow server
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r3c', 'r4c', 'r3d', 'r4d'] 
+                                    for ass2 in ['r5e', 'r6e']]
+        # downstream
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r5e', 'r6e', 'r5f', 'r6f'] 
+                                    for ass2 in ['r7g', 'r8g']]
+        # n_system
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r7g', 'r8g', 'r7h', 'r8h'] 
+                                    for ass2 in ['r9j', 'r10i', 'r10j']]
+        # parallel
+        self.double_assignments += [(ass1, ass2) 
+                                    for ass1 in ['r9j', 'r10i', 'r10j'] 
+                                    for ass2 in ['r11k', 'r12k', 'r11l', 'r12l']]
+        self.double_assignments += [('r11k', 'r12l')] # ('r11l', 'r12k') not needed because of symmetrical actions
 
+        self.action_space += self.double_assignments
         self.action_space += ['postpone', 'do_nothing']
 
         self.waiting_cases = {task: [] for task in self.task_types}
@@ -68,6 +90,8 @@ class SMDP_composite:
 
         self.total_time = 0
         self.total_arrivals = 0
+        if self.is_stopping_criteria_time:
+            nr_arrivals = nr_arrivals * 2 # To ensure that the simulation runs for a longer time
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
         self.episodic_reward = 0
@@ -108,6 +132,10 @@ class SMDP_composite:
         assignments_possible = [is_available_resources[int(assignment[1:-1])-1] 
                                 and is_waiting_tasks[assignment[-1]] 
                                 for assignment in self.assignments]
+        # Check which double assignments are possible based on the single assignments
+        double_assignments_possible = [assignments_possible[self.assignment_indices[assignment[0]]]
+                                        and assignments_possible[self.assignment_indices[assignment[1]]] 
+                                        for assignment in self.double_assignments]
 
         if self.arrivals_coming():
             # When arrivals are coming, postponing is possible when there are tasks waiting for the resources
@@ -118,13 +146,13 @@ class SMDP_composite:
                                           and sum(assignments_possible) == 2))
         else:
             postpone_possible = any(assignments_possible) and not all(is_available_resources)
-        mask = assignments_possible + [postpone_possible]
+        mask = assignments_possible + double_assignments_possible + [postpone_possible]
         do_nothing_possible =  not any(mask)
         return mask + [do_nothing_possible]
 
     def reset(self):
-        # if self.crn:
-        #     self.crn.reset()
+        if self.crn:
+            self.crn.reset()
         self.waiting_cases = {task: [] for task in self.task_types}
         self.partially_completed_cases = []
 
@@ -275,12 +303,7 @@ class SMDP_composite:
                         self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
                 else:
                     raise Exception(f'No cases waiting for task {task} to be processed by resource {resource}')
-            
-            # Another action is possible, so we return to the agent and do not evolve the state
-            if sum(self.action_mask()) > 1:
-                return self.observation(), 0, self.is_done(), False, None
-
-
+        
         # now calculate the next state and how long it takes to reach that state
         # the time is to the next state is exponentially distributed with rate
         # min(lambda, mu_(r1, a) * active r1, mu_(r2, a) * active r2) = 
@@ -346,19 +369,17 @@ class SMDP_composite:
                         if self.track_cycle_times:
                             self.waiting_starts[case_id][next_task] = self.total_time
                         self.waiting_cases[next_task].append(case_id)
-                    elif next_task == 'Complete':
-                        # If config_type is composite, we need to check if the case is partially completed
-                        if self.config_type != "composite" or case_id in self.partially_completed_cases:
-                            if self.track_cycle_times:
-                                self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
-                            if self.reward_function == 'case_cycle_time':                            
-                                reward += -self.cycle_times[case_id]
-                            elif self.reward_function == 'inverse_case_cycle_time':
-                                reward += 1/(1 + self.cycle_times[case_id])
-                            elif self.reward_function == 'case':
-                                reward += 1
-                            if self.reporter:
-                                self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
+                    elif next_task == 'Complete' and case_id in self.partially_completed_cases:
+                        if self.track_cycle_times:
+                            self.cycle_times[case_id] = self.total_time - self.arrival_times[case_id]
+                        if self.reward_function == 'case_cycle_time':                            
+                            reward += -self.cycle_times[case_id]
+                        elif self.reward_function == 'inverse_case_cycle_time':
+                            reward += 1/(1 + self.cycle_times[case_id])
+                        elif self.reward_function == 'case':
+                            reward += 1
+                        if self.reporter:
+                            self.reporter.callback(case_id, 'complete', '<end_event>', self.total_time)
                 # completion the parallel task adds to list of partially completed cases
                 # if task i or j has been completed previously, the case may now continue
                 if task == 'i' or task == 'j': 

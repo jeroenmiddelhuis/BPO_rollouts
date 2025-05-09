@@ -33,7 +33,8 @@ def greedy_policy(env):
         elif processing_time == min_processing_time:
             lowest_processing_times.append(assignment)
 
-    assignment = random.choice(lowest_processing_times)
+    assignment = lowest_processing_times[0]#random.choice(lowest_processing_times)
+    return assignment
     possible_double_assignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
 
     if len(possible_double_assignments) > 0:
@@ -129,6 +130,9 @@ def random_policy(env):
     assignment = random.choice(assignments)
     possible_double_asignments = [double_assignment for double_assignment in double_assignments if assignment in double_assignment]
 
+    # with 0.1 probability select the postpone action
+    if random.random() < 0.05:
+        return 'postpone'
     if len(possible_double_asignments) > 0:
         return tuple(random.choice(possible_double_asignments))
     else:

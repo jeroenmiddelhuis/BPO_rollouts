@@ -8,6 +8,7 @@ test.csv
 settings.json
 /results_mean
 /results_tuning
+/results_test
 /.vscode
 /data
 log.txt

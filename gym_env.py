@@ -36,6 +36,7 @@ class Environment(Env):
             print('Completed cases:', len(self.env.cycle_times))
             print('Uncompleted cases:', self.env.total_arrivals - len(self.env.cycle_times))
             print('Average cycle time:', np.mean(list(self.env.cycle_times.values())))
+            print('Total cycle time:', np.sum(list(self.env.cycle_times.values())))
             print('Selected actions:', self.selected_actions)
             print('------------------------------------------')
             print('\n')

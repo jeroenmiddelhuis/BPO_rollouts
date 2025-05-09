@@ -17,12 +17,19 @@ def learn(config_type,
           nr_states_to_explore=1000, 
           nr_rollouts=100, 
           nr_steps_per_rollout=100,
-          model_type = 'neural_network', 
+          model_type = 'neural_network',
+          arrival_rate_multiplier=1,
           only_statistically_significant=False):
     
-    if config_type == 'composite':
-        env = smdp_composite.SMDP_composite(episode_length, crn=CRN(), track_cycle_times=False)
-        evaluation_env = smdp_composite.SMDP_composite(episode_length, config_type)
+    if config_type == 'composite' or config_type.startswith('scenario'):
+        env = smdp_composite.SMDP_composite(episode_length, config_type, crn=CRN(), track_cycle_times=False, arrival_rate_multiplier=arrival_rate_multiplier)
+        evaluation_env = smdp_composite.SMDP_composite(episode_length, config_type, arrival_rate_multiplier=arrival_rate_multiplier)
+
+        if config_type == "composite":
+            training_dir = f"training_data/{config_type}_{arrival_rate_multiplier}/"
+        else:
+            training_dir = f"training_data/{config_type}/"
+        os.makedirs(training_dir, exist_ok=True)
     else:
         env = smdp.SMDP(episode_length, config_type, crn=CRN(), track_cycle_times=False)
         evaluation_env = smdp.SMDP(episode_length, config_type)
@@ -31,45 +38,61 @@ def learn(config_type,
     pl.save(filename_without_extension + config_type + ".v1" + extension)
     pl.save(filename_without_extension + config_type + ".best_policy" + extension)  
     pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v1" + extension)
+    print('Filling cache..')
     pl.cache = fill_cache(env, pl)
-    
+    print(f'Cache filled with {len(pl.cache)} state-action pairs.')
     
     print('Evaluating policy 1..')
-    rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
+    rewards, cycle_times = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
+    write_to_file_reward_and_cycle_time(training_dir + config_type + ".v1", rewards, cycle_times)
+
     best_policy_reward = np.mean(rewards)
-    print('Reward of policy version 1:', best_policy_reward)
+    print(f'Reward of policy version 1:', best_policy_reward)
+    print(f'Mean cycle time of policy version 1:', np.mean(cycle_times))
     best_policy_v = 1
     print('\n')
     for i in range(2, learning_iterations+1):
         pl = rollouts.learn_iteration(env, pl.policy, nr_states_to_explore, nr_rollouts, nr_steps_per_rollout, pl)
         pl.save(filename_without_extension + config_type + ".v" + str(i) + extension)
-        pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(i) + extension)
-        pl.cache = fill_cache(env, pl)
 
         print(f'Evaluating new policy {i}..')
         # Evaluate the new policy
-        rewards, _ = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
+        rewards, cycle_times = rollouts.evaluate_policy(evaluation_env, pl.policy, nr_rollouts=100, nr_arrivals=2500, parallel=False)
+        write_to_file_reward_and_cycle_time(training_dir + config_type + f".v{i}", rewards, cycle_times)
         new_policy_reward = np.mean(rewards)
         print(f'Reward of policy version {i}:', new_policy_reward)
+        print(f'Mean cycle time of policy version {i}:', np.mean(cycle_times))
         print(f"Reward of best policy, version {best_policy_v}: {best_policy_reward}. Reward of new policy, version {i}: {new_policy_reward}.")
         if new_policy_reward < best_policy_reward: # New policy is not better than the previous policy
             print("Reward of policy version", i, "is worse than previous policy, reverting to previous policy.")
-            pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
-            pl.cache = fill_cache(env, pl)
+            # pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+            # pl.cache = fill_cache(env, pl)
         else:
             print(f"Policy version {best_policy_v} improved, continuing with policy version {i}.")
             best_policy_reward = new_policy_reward
             best_policy_v = i
-            pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
-            pl.cache = fill_cache(env, pl)
+            pl.save(filename_without_extension + config_type + ".best_policy" + extension)
+            # pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+            # pl.cache = fill_cache(env, pl)
+
+        pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
+        print('Filling cache..')
+        pl.cache = fill_cache(env, pl)
+        print(f'Cache filled with {len(pl.cache)} state-action pairs.')
         print('\n')
 
-    pl = policy_learner.PolicyLearner.load(filename_without_extension + config_type + ".v" + str(best_policy_v) + extension)
-    pl.save(filename_without_extension + config_type + ".best_policy" + extension)
-
+def write_to_file_reward_and_cycle_time(filename, rewards, cycle_times):
+    """
+    Store the rewards and cycle times in a file
+    """
+    with open(filename, 'w') as file:
+        file.write("reward,cycle_time\n")
+        for i in range(len(rewards)):
+            file.write(f"{rewards[i]},{cycle_times[i]}\n")
 
 def fill_cache(env, policy):
-    if env.config_type != 'composite':
+    if env.config_type != 'composite' and not env.config_type.startswith('scenario'):
+        print('Filling cache with all states..')
         _, frequent_states, _ =  determine_state_space(env)
         frequent_states = torch.tensor(np.array([policy.normalize_observation(np.array(state, dtype=float)) for state in frequent_states]), dtype=torch.float32)
         probabilities = policy.model(frequent_states).detach()
@@ -176,8 +199,8 @@ def evaluate_policy(filename, config_type, episode_length=10, nr_rollouts=100, r
                 print('FIFO policy:', average_reward)
 
 def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, results_dir=None, env_type='smdp', results_string = ''):
-    if config_type == 'composite':
-        env = smdp_composite.SMDP_composite(episode_length)
+    if config_type == 'composite' or config_type.startswith('scenario'):
+        env = smdp_composite.SMDP_composite(episode_length, config_type)
     else:
         env = smdp.SMDP(episode_length, config_type)
     pl_name = None
@@ -205,15 +228,15 @@ def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, 
         results_file_path = os.path.join(results_dir, f'{pl_name}_{config_type}.txt')
 
     with open(results_file_path, 'w') as results_file:
-        results_file.write(f"reward,cycle_time\n")
+        # results_file.write(f"reward,cycle_time\n")
         if pl_name in ['pi', 'vi']:
             rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500, parallel=False)
         else:
             rewards, cycle_times = rollouts.evaluate_policy(env, pl, nr_rollouts, nr_arrivals=2500, parallel=False)
         print(f'Mean reward: {np.mean(rewards)}, std reward: {np.std(rewards)}')
         print(f'Mean cycle time: {np.mean(cycle_times)}, std cycle time: {np.std(cycle_times)}')
-        for i in range(nr_rollouts):
-            results_file.write(f"{rewards[i]},{cycle_times[i]}\n")
+        # for i in range(nr_rollouts):
+        #     results_file.write(f"{rewards[i]},{cycle_times[i]}\n")
 
 def compare_all_states(filename, episode_length=10, nr_rollouts=100):
     """
@@ -266,29 +289,29 @@ def main():
     """
     Training of the policies
     """
-    # nr_rollouts = 100
-    # nr_steps_per_rollout = 100
-    # config_type = sys.argv[1] if len(sys.argv) > 1 else 'low_utilization'
-    # model_type = 'neural_network'
-    # learning_iterations = 3
+    nr_rollouts = 100
+    nr_steps_per_rollout = 100
+    config_type = sys.argv[1] if len(sys.argv) > 1 else 'scenario_1'
+    model_type = 'neural_network'
+    learning_iterations = 10
 
-    # dir = f".//models//pi//smdp//{config_type}//"
-    # if not os.path.exists(dir):
-    #     os.makedirs(dir, exist_ok=True)
+    dir = f".//models//pi//smdp_test//{config_type}//"
+    if not os.path.exists(dir):
+        os.makedirs(dir, exist_ok=True)
 
-    # print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
-    # print('Nr rollouts:', nr_rollouts, flush=True)
-    # print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
+    print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+    print('Nr rollouts:', nr_rollouts, flush=True)
+    print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
 
-    # learn(config_type,
-    #     greedy_policy,
-    #     dir,
-    #     learning_iterations=learning_iterations,
-    #     episode_length=2500, # nr_cases
-    #     nr_states_to_explore=20000,
-    #     nr_rollouts=nr_rollouts,
-    #     nr_steps_per_rollout=nr_steps_per_rollout,
-    #     model_type=model_type)
+    learn(config_type,
+        greedy_policy,
+        dir,
+        learning_iterations=learning_iterations,
+        episode_length=1000, # nr_cases
+        nr_states_to_explore=200,
+        nr_rollouts=nr_rollouts,
+        nr_steps_per_rollout=nr_steps_per_rollout,
+        model_type=model_type)
 
 
     """
@@ -308,36 +331,36 @@ def main():
     #             env_types.append('mdp')
     #         for env_type in env_types:
 
-    config_type = 'slow_server'
-    policy = 'greedy'
-    env_type = 'smdp'
+    # config_type = 'scenario_1_2_3_4'
+    # policy = 'greedy'
+    # env_type = 'smdp'
 
-    print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
-    results_dir = f".//results_test//{policy}//"
-    os.makedirs(results_dir, exist_ok=True)
+    # print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
+    # results_dir = f".//results_test//{policy}//"
+    # os.makedirs(results_dir, exist_ok=True)
 
-    env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
+    # env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
     
-    if policy == 'greedy':
-        pl = greedy_policy
-    elif policy == 'random':
-        pl = random_policy
-    elif policy == 'fifo':
-        pl = fifo_policy
-    elif policy == 'threshold':
-        pl = threshold_policy
-    elif policy == 'vi':
-        filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
-        pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
-    elif policy == 'pi':
-        filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.pth"
-        pl = policy_learner.PolicyLearner.load(filename)
-        print('Filling cache..')
-        pl.cache = fill_cache(env, pl)
-        print(f'Cache filled with {len(pl.cache)} state-action pairs.')
+    # if policy == 'greedy':
+    #     pl = greedy_policy
+    # elif policy == 'random':
+    #     pl = random_policy
+    # elif policy == 'fifo':
+    #     pl = fifo_policy
+    # elif policy == 'threshold':
+    #     pl = threshold_policy
+    # elif policy == 'vi':
+    #     filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
+    #     pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
+    # elif policy == 'pi':
+    #     filename = f"./models/pi/{env_type}/{config_type}/{config_type}.best_policy.pth"
+    #     pl = policy_learner.PolicyLearner.load(filename)
+    #     print('Filling cache..')
+    #     pl.cache = fill_cache(env, pl)
+    #     print(f'Cache filled with {len(pl.cache)} state-action pairs.')
 
-    evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=1,
-                    results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
+    # evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=100,
+    #                 results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
 
 
 if __name__ == '__main__':

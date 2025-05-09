@@ -10,7 +10,7 @@ from multiprocessing import Pool
 import torch
 from heuristic_policies import random_policy
 
-def rollout(env, policy, nr_steps_per_rollout=np.inf):
+def rollout(env, policy, nr_steps_per_rollout=np.inf, track=False):
     """
     Does a rollout for the environment from the current state using the given policy.
     Assumes that the environment is terminating.
@@ -19,19 +19,23 @@ def rollout(env, policy, nr_steps_per_rollout=np.inf):
     done = False
     total_reward = 0
     nr_steps = 0
-    #actions = {}
+    actions = {}
     while not done:
         action = policy(env)
-        # action_label = env.action_space[np.argmax(action)]
-        # if action_label not in actions:
-        #     actions[action_label] = 0
-        # actions[action_label] += 1
+        if track:
+            print('Action:', action)
+            action_label = env.action_space[np.argmax(action)]
+            print('Action label:', action_label, "argmax:", np.argmax(action))
+            if action_label not in actions:
+                actions[action_label] = 0
+            actions[action_label] += 1
         _, reward, done, _, _ = env.step(action)
         nr_steps += 1
         total_reward += reward
         if nr_steps >= nr_steps_per_rollout:
             done = True
-    #print(actions)
+    if track:
+        print(actions)
     return total_reward
 
 
@@ -95,11 +99,11 @@ def find_learning_sample(env, policy, nr_rollouts_per_action, nr_steps_per_rollo
     if observation is None:  # if we can't learn anything, we return None.
         return None
     means = {action: np.mean(rewards[action]) for action in possible_actions}
-    print('Observation:', observation)
-    print('Possible actions:', [env.action_space[np.argmax(p_action)] for p_action in possible_actions])
-    print('Means:', {env.action_space[np.argmax(action)]: mean for action, mean in means.items()})
+    # print('Observation:', observation)
+    # print('Possible actions:', [env.action_space[np.argmax(p_action)] for p_action in possible_actions])
+    # print('Means:', {env.action_space[np.argmax(action)]: mean for action, mean in means.items()})
     best_action = max(means, key=means.get)
-    print('Best action:', env.action_space[np.argmax(best_action)])
+    # print('Best action:', env.action_space[np.argmax(best_action)])
     if not only_statistically_significant:  # if we don't care about statistical significance, we just return the best action.
         return (observation, best_action)#, {env.action_space[np.argmax(action)]: mean for action, mean in means.items()}
     # We use a t-test to check if the best action is significantly better than the others.
@@ -135,6 +139,8 @@ def random_states(env, policy, nr_states):
     # The next sample is taken after a normally distributed number of steps with mean steps/nr_samples_per_rollout and standard deviation steps/nr_samples_per_rollout.
     sampled_states = []
     env.reset()
+    if env.crn:
+        env.crn.reset()
     while len(sampled_states) < nr_states:
         next_sample_after = -1
         while next_sample_after < 0:
@@ -146,6 +152,8 @@ def random_states(env, policy, nr_states):
             current_step += 1
             if done:
                 env.reset()
+                if env.crn:
+                    env.crn.reset()
         if sum(env.action_mask()) > 1:
             # Add more case arrivals to the state by setting rollout_length
             # Since we use a fixed number of steps per rollout, we set the rollout_length to a high number.
@@ -161,15 +169,15 @@ def process_state(args):
     tau, policy, nr_rollouts_per_action_per_state,\
     nr_steps_per_rollout, only_statistically_significant = args
     if env_type == "smdp":
-        if config_type == 'composite':
-            env_copy = smdp_composite.SMDP_composite(episode_length, config_type, track_cycle_times=False)
+        if config_type == 'composite' or config_type.startswith('scenario'):
+            env_copy = smdp_composite.SMDP_composite(episode_length, config_type, crn=CRN(), track_cycle_times=False)
         else:
-            env_copy = smdp.SMDP(episode_length, config_type, track_cycle_times=False)
+            env_copy = smdp.SMDP(episode_length, config_type, crn=CRN(), track_cycle_times=False)
     elif env_type == "mdp":
         if config_type == 'composite':
-            env_copy = mdp_composite.MDP_composite(episode_length, config_type, tau, track_cycle_times=False)
+            env_copy = mdp_composite.MDP_composite(episode_length, config_type, tau, crn=CRN(), track_cycle_times=False)
         else:
-            env_copy = mdp.MDP(episode_length, config_type, tau, track_cycle_times=False)
+            env_copy = mdp.MDP(episode_length, config_type, tau, crn=CRN(), track_cycle_times=False)
     else:
         raise ValueError("Unknown environment type.")
         
@@ -207,8 +215,8 @@ def learn_iteration(env,
              nr_steps_per_rollout, only_statistically_significant) for state in states]
 
     with Pool() as pool:
-        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=True))
-    
+        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=False))
+
     # 3. Collect results
     learning_samples_X = []
     learning_samples_y = []
@@ -238,10 +246,10 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
         total_rewards = []
         cycle_times = []
         for i in range(nr_rollouts):
-            env.reset()
+            env.reset() # No need to reset the CRN, since we don't use it in this case.
             if nr_arrivals is not None:
                 env.nr_arrivals = nr_arrivals
-            reward = rollout(env, policy)
+            reward = rollout(env, policy, track=True)
             total_rewards.append(reward)
             cycle_times.append(np.mean(list(env.cycle_times.values())))
         return total_rewards, cycle_times
@@ -251,15 +259,18 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
         env.reset()
         with Pool() as pool:
             result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), 
-                               total=nr_rollouts, disable=True))
+                               total=nr_rollouts, disable=False))
             total_rewards, mean_cycle_times = zip(*result)
         return total_rewards, mean_cycle_times
 
 
 def evaluate_policy_single_rollout(args):
     env, policy, nr_arrivals = args
-    if env.config_type == 'composite':
-        env_copy = smdp_composite.SMDP_composite(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
+    if env.config_type == 'composite' or env.config_type.startswith('scenario'):
+        env_copy = smdp_composite.SMDP_composite(nr_arrivals, 
+                                                 env.config_type, 
+                                                 track_cycle_times=env.track_cycle_times, 
+                                                 arrival_rate_multiplier=env.arrival_rate_multiplier)
     else:
         env_copy = smdp.SMDP(nr_arrivals, env.config_type, track_cycle_times=env.track_cycle_times)
 
