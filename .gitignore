@@ -12,3 +12,5 @@ settings.json
 /.vscode
 /data
 log.txt
+training_data*/
+/models

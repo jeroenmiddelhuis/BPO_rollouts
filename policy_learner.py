@@ -33,8 +33,8 @@ class PolicyLearner():
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, output_dim),
-            nn.Softmax(dim=-1)
+            nn.Linear(128, output_dim)
+            #nn.Softmax(dim=-1)
         )
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
@@ -47,6 +47,15 @@ class PolicyLearner():
         self.cache_misses = 0
         self.cache_evictions = 0
 
+        # Count the number of unique actions
+        # action_count = {}
+        # for action in actions:
+        #     action_tuple = tuple(action)
+        #     if action_tuple in action_count:
+        #         action_count[action_tuple] += 1
+        #     else:
+        #         action_count[action_tuple] = 1
+        # print("Action count:", action_count)
         # Convert and normalize data
         observations = np.array(observations, dtype=float)
         observations = np.apply_along_axis(self.normalize_observation, 1, observations)
@@ -96,8 +105,18 @@ class PolicyLearner():
             observation[-1] = np.minimum(1.0, observation[-1] / 100.0)
         elif len(observation) <= 8: # 2 activity scenarios
             observation[-2:] = np.minimum(1.0, observation[-2:] / 100.0)
-        else: # composite model
+        elif len(observation) == 16: # scenario_1_2
+            observation[-4:] = np.minimum(1.0, observation[-4:] / 100.0)
+        elif len(observation) == 24: # scenario_1_2_3
+            observation[-6:] = np.minimum(1.0, observation[-6:] / 100.0)
+        elif len(observation) == 32: # 2 scenario_1_2_3_4
+            observation[-8:] = np.minimum(1.0, observation[-8:] / 100.0)
+        elif len(observation) == 39: # 2 scenario_1_2_3_4_5
+            observation[-10:] = np.minimum(1.0, observation[-10:] / 100.0)
+        elif len(observation) == 47: # composite model
             observation[-12:] = np.minimum(1.0, observation[-12:] / 100.0)
+        else:
+            raise ValueError(f"Unknown observation length: {len(observation)}")
         return observation
 
     def predict(self, observation, action_mask):
@@ -105,38 +124,39 @@ class PolicyLearner():
             return action_mask
         observation = np.array(observation, dtype=float)
         observation = self.normalize_observation(observation)
-        action_probs = self.predict_with_cache(observation, action_mask)   
-        print(action_probs)
-        print(action_mask)
-        print("sum of action probs:", sum(action_probs))
-        action_probs = action_probs * action_mask
-        print(action_probs)
-        print("sum of action probs:", sum(action_probs))
+        if len(observation) < 30: # If the observation is small, use the cache
+            action_probs = self.predict_with_cache(observation, action_mask)
+        else:
+            # Get raw logits from model
+            observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+            logits = self.model(observation)[0]
+            
+            # Apply softmax only for prediction, not during training
+            action_probs = torch.nn.functional.softmax(logits, dim=-1).detach().numpy()
+        masked_probs = np.where(np.array(action_mask) > 0, action_probs, -np.inf)
         action = [0] * len(action_probs)
-        action[np.argmax(action_probs)] = 1
+        action[np.argmax(masked_probs)] = 1
         return action
     
     def predict_with_cache(self, observation, action_mask=None):
-        """
-        Tries to get the prediction from the observation from cache.
-        If it is not in cache, it calculates the prediction and stores it in cache.
-        If the cache is full, it removes the oldest entry.
-        """
         observation_tuple = tuple(observation)
         cached_value = self.cache.get(observation_tuple)
         if cached_value is not None:
             self.cache_hits += 1
             return cached_value
 
-        # No value has been found in the cache, calculate the prediction
+        # Get raw logits from model
         observation = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
-        action_probs = self.model(observation)[0]
-        action_probs = action_probs.detach().numpy()
+        logits = self.model(observation)[0]
+        
+        # Apply softmax only for prediction, not during training
+        action_probs = torch.nn.functional.softmax(logits, dim=-1).detach().numpy()
 
+        # Cache the probabilities
         self.cache_misses += 1
         if len(self.cache) >= self.CACHE_SIZE:
             self.cache_evictions += 1
-            self.cache.pop(next(iter(self.cache)))  # Remove the oldest entry, not necessarily the best way to do it, but it is simple.
+            self.cache.pop(next(iter(self.cache)))
         self.cache[observation_tuple] = action_probs
         return action_probs
 
@@ -166,8 +186,8 @@ class PolicyLearner():
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, output_dim),
-            nn.Softmax(dim=-1)
+            nn.Linear(128, output_dim)
+            #nn.Softmax(dim=-1)
         )
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)

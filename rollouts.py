@@ -9,6 +9,7 @@ import smdp_composite, mdp_composite
 from multiprocessing import Pool
 import torch
 from heuristic_policies import random_policy
+import os
 
 def rollout(env, policy, nr_steps_per_rollout=np.inf, track=False):
     """
@@ -23,9 +24,9 @@ def rollout(env, policy, nr_steps_per_rollout=np.inf, track=False):
     while not done:
         action = policy(env)
         if track:
-            print('Action:', action)
+            #print('Action:', action)
             action_label = env.action_space[np.argmax(action)]
-            print('Action label:', action_label, "argmax:", np.argmax(action))
+            #print('Action label:', action_label, "argmax:", np.argmax(action))
             if action_label not in actions:
                 actions[action_label] = 0
             actions[action_label] += 1
@@ -167,10 +168,11 @@ def random_states(env, policy, nr_states):
 def process_state(args):
     state, env_type, episode_length, config_type,\
     tau, policy, nr_rollouts_per_action_per_state,\
-    nr_steps_per_rollout, only_statistically_significant = args
+    nr_steps_per_rollout, arrival_rate_multiplier,\
+    only_statistically_significant = args
     if env_type == "smdp":
         if config_type == 'composite' or config_type.startswith('scenario'):
-            env_copy = smdp_composite.SMDP_composite(episode_length, config_type, crn=CRN(), track_cycle_times=False)
+            env_copy = smdp_composite.SMDP_composite(episode_length, config_type, crn=CRN(), track_cycle_times=False, arrival_rate_multiplier=arrival_rate_multiplier)
         else:
             env_copy = smdp.SMDP(episode_length, config_type, crn=CRN(), track_cycle_times=False)
     elif env_type == "mdp":
@@ -212,10 +214,12 @@ def learn_iteration(env,
     # We use the policy to do the rollouts
     args = [(state, env_type, env.nr_arrivals, env.config_type, 
              getattr(env, 'tau', None), policy, nr_rollouts_per_action_per_state,
-             nr_steps_per_rollout, only_statistically_significant) for state in states]
+             nr_steps_per_rollout, env.arrival_rate_multiplier, only_statistically_significant) for state in states]
 
-    with Pool() as pool:
-        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=False))
+    # Set max parallel jobs to half the number of CPUs (at least 1)
+    max_parallel_jobs = max(1, int(0.5 * os.cpu_count()))
+    with Pool(processes=max_parallel_jobs) as pool:
+        results = list(tqdm(pool.imap(process_state, args), total=len(states), disable=True))
 
     # 3. Collect results
     learning_samples_X = []
@@ -245,11 +249,11 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
     if not parallel:
         total_rewards = []
         cycle_times = []
-        for i in range(nr_rollouts):
+        for i in tqdm(range(nr_rollouts), desc="Evaluating policy", disable=True):
             env.reset() # No need to reset the CRN, since we don't use it in this case.
             if nr_arrivals is not None:
                 env.nr_arrivals = nr_arrivals
-            reward = rollout(env, policy, track=True)
+            reward = rollout(env, policy)
             total_rewards.append(reward)
             cycle_times.append(np.mean(list(env.cycle_times.values())))
         return total_rewards, cycle_times
@@ -257,9 +261,10 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
         if nr_arrivals is None:
             nr_arrivals = env.nr_arrivals
         env.reset()
-        with Pool() as pool:
+        max_parallel_jobs = max(1, int(0.5 * os.cpu_count()))
+        with Pool(processes=max_parallel_jobs) as pool:
             result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), 
-                               total=nr_rollouts, disable=False))
+                               total=nr_rollouts, disable=True))
             total_rewards, mean_cycle_times = zip(*result)
         return total_rewards, mean_cycle_times
 

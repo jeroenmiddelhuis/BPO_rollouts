@@ -2,6 +2,7 @@ from reporters import EventLogReporter, ProcessReporter
 import os, json
 import numpy as np
 import random
+import re
 
 class SMDP_composite:
     def __init__(self, nr_arrivals, config_type='composite', 
@@ -48,6 +49,39 @@ class SMDP_composite:
                             [f'assigned_{assignment}' for assignment in self.assignments] + # r9 can only be assigned to one task
                             [f'waiting_{task}' for task in self.task_types])
 
+        # double actions
+        # high utilization 2
+        if self.config_type in ['composite', 'scenario_1_2', 'scenario_1_2_3',
+                                'scenario_1_2_3_4', 'scenario_1_2_3_4_5']:
+            self.double_assignments =  [(ass1, ass2) 
+                                        for ass1 in ['r1a', 'r2a', 'r1b', 'r2b'] 
+                                        for ass2 in ['r3c', 'r4c']]
+        # slow server 3
+        if self.config_type in ['composite', 'scenario_1_2_3',
+                                'scenario_1_2_3_4', 'scenario_1_2_3_4_5']:            
+            self.double_assignments += [(ass1, ass2) 
+                                        for ass1 in ['r3c', 'r4c', 'r3d', 'r4d'] 
+                                        for ass2 in ['r5e', 'r6e']]
+        # downstream 4   
+        if self.config_type in ['composite',
+                                'scenario_1_2_3_4', 'scenario_1_2_3_4_5']:
+            self.double_assignments += [(ass1, ass2) 
+                                        for ass1 in ['r5e', 'r6e', 'r5f', 'r6f'] 
+                                        for ass2 in ['r7g', 'r8g']]
+        # n_system 5
+        if self.config_type in ['composite', 'scenario_1_2_3_4_5']:
+            self.double_assignments += [(ass1, ass2) 
+                                        for ass1 in ['r7g', 'r8g', 'r7h', 'r8h'] 
+                                        for ass2 in ['r9j', 'r10i', 'r10j']]
+        # parallel 6
+        if self.config_type in ['composite']:
+            self.double_assignments += [(ass1, ass2) 
+                                        for ass1 in ['r9j', 'r10i', 'r10j'] 
+                                        for ass2 in ['r11k', 'r12k', 'r11l', 'r12l']]
+            self.double_assignments += [('r11k', 'r12l')] # ('r11l', 'r12k') not needed because of symmetrical actions
+
+
+        self.action_space += self.double_assignments
         self.action_space += ['postpone', 'do_nothing']
 
         self.waiting_cases = {task: [] for task in self.task_types}
@@ -71,6 +105,7 @@ class SMDP_composite:
         self.nr_arrivals = nr_arrivals
         self.original_nr_arrivals = nr_arrivals
         self.episodic_reward = 0
+
         if self.track_cycle_times:
             self.arrival_times = {}
             self.cycle_times = {}
@@ -82,7 +117,7 @@ class SMDP_composite:
 
         self.actions_taken = {}
         self.reporter = reporter
-        self.test = 0
+        self.wrong_actions = 0
 
     def observation(self):
         processing_resources = self.get_processing_resources()
@@ -95,31 +130,72 @@ class SMDP_composite:
                                 for assignment in self.assignments]
         # Check the number of waiting cases at each activity
         waiting_cases = [len(self.waiting_cases.get(task, [])) for task in self.task_types if task != "Start"]
-
         return is_available_resources + assigned_assignments + waiting_cases
 
     def action_mask(self):
         processing_resources = self.get_processing_resources()
-        # Check if the resources are available (resource 1 has index 0)
-        is_available_resources = [True if len(processing_resources[i]) == 0 else False for i in range(len(processing_resources))]
-        # Check if there are tasks waiting for the resources
+        # True if resource is available (empty list)
+        is_available_resources = [len(processing_resources[i]) == 0 for i in range(len(processing_resources))]
+        # True if there are waiting cases for the task
         is_waiting_tasks = {task: len(self.waiting_cases[task]) > 0 for task in self.task_types if task != 'Start'}
-        # Check which assignments are possible
-        assignments_possible = [is_available_resources[int(assignment[1:-1])-1] 
-                                and is_waiting_tasks[assignment[-1]] 
-                                for assignment in self.assignments]
+        
+        # Parse assignments and check availability
+        assignments_possible = []
+        for assignment in self.assignments:
+            # Parse resource and task
+            if not assignment.startswith('r') or len(assignment) < 2:
+                assignments_possible.append(False)
+                continue
+                
+            # Find the position where digits end
+            i = 1
+            while i < len(assignment) and assignment[i].isdigit():
+                i += 1
+                
+            if i == 1 or i == len(assignment):  # No digits or no task
+                assignments_possible.append(False)
+                continue
+                
+            resource_idx = int(assignment[1:i]) - 1
+            task = assignment[i:]
+            resource = f"r{resource_idx+1}"
+            
+            # Check resource-task compatibility and availability
+            possible = (
+                0 <= resource_idx < len(is_available_resources)
+                and is_available_resources[resource_idx]
+                and task in is_waiting_tasks
+                and is_waiting_tasks[task]
+                and resource in self.resource_pools[task]
+            )
+            assignments_possible.append(possible)
+        
+        # Double assignments: both singles must be possible
+        double_assignments_possible = [
+            assignments_possible[self.assignment_indices[assignment[0]]]
+            and assignments_possible[self.assignment_indices[assignment[1]]]
+            for assignment in self.double_assignments
+        ]
 
-        if self.arrivals_coming():
-            # When arrivals are coming, postponing is possible when there are tasks waiting for the resources
-            # However, if there are only tasks at a, and resource 1 and 2 are not assigned, we don't allow postponing
-            postpone_possible = (any(assignments_possible) 
-                                 and not (assignments_possible[self.assignment_indices['r1a']] 
-                                          and assignments_possible[self.assignment_indices['r2a']] 
-                                          and sum(assignments_possible) == 2))
-        else:
-            postpone_possible = any(assignments_possible) and not all(is_available_resources)
-        mask = assignments_possible + [postpone_possible]
-        do_nothing_possible =  not any(mask)
+        postpone_possible = False
+        # Postpone logic
+        # if self.arrivals_coming():
+        #     # Check for special first tasks that might be important
+        #     r1a_idx = self.assignment_indices.get('r1a')
+        #     r2a_idx = self.assignment_indices.get('r2a')
+            
+        #     both_a_possible = (
+        #         r1a_idx is not None and r2a_idx is not None and
+        #         assignments_possible[r1a_idx] and assignments_possible[r2a_idx] and
+        #         sum(assignments_possible) == 2
+        #     )
+        #     postpone_possible = any(assignments_possible) and not both_a_possible
+        # else:
+        #     postpone_possible = any(assignments_possible) and not all(is_available_resources)
+            
+        mask = assignments_possible + double_assignments_possible + [postpone_possible]
+        do_nothing_possible = not any(mask)
+        
         return mask + [do_nothing_possible]
 
     def reset(self):
@@ -144,6 +220,7 @@ class SMDP_composite:
         self.total_time = 0
         self.total_arrivals = 0
         self.nr_arrivals = self.original_nr_arrivals
+
         if self.track_cycle_times:
             self.arrival_times = {}
             self.cycle_times = {}
@@ -181,7 +258,7 @@ class SMDP_composite:
         total_sum = sum(p_transitions)
         if current_task == 'Complete':
             raise ValueError('The current task cannot be "Complete".')
-        elif current_task == 'i' or current_task == 'j': # If the parallel task is i or j, return k and l
+        elif self.config_type == 'composite' and (current_task == 'i' or current_task == 'j'): # If the parallel task is i or j, return k and l
             return ['k', 'l']
         elif current_task == 'k' or current_task == 'l': # If the parallel task is k or l, return Complete
             if case_id in self.partially_completed_cases:
@@ -274,11 +351,26 @@ class SMDP_composite:
                     if self.reporter:
                         self.reporter.callback(case_id, task, '<task:start>', self.total_time, resource)
                 else:
-                    raise Exception(f'No cases waiting for task {task} to be processed by resource {resource}')
+                    print(f'No cases waiting for task {task} to be processed by resource {resource}')
+                    processing_resources = self.get_processing_resources()
+                    is_available_resources = [1 if len(processing_resources[i]) == 0 else 0 for i in range(len(processing_resources))]
+                    is_waiting_tasks = {task: len(self.waiting_cases[task]) > 0 for task in self.task_types if task != 'Start'}
+                    assignments_possible = [is_available_resources[int(assignment[1:-1])-1] 
+                                            and is_waiting_tasks[assignment[-1]] 
+                                            for assignment in self.assignments]
+                    mask = self.action_mask()
+                    self.wrong_actions += 1
+                    print("Number of wrong actions:", self.wrong_actions)
+                    print("Processing resources:", processing_resources)
+                    print("Is available resources:", is_available_resources)
+                    print("Is waiting tasks:", is_waiting_tasks)
+                    print("Assignments possible:", assignments_possible)
+                    print("Action space:", self.action_space)
+                    print("Mask:", mask)
             
             # Another action is possible, so we return to the agent and do not evolve the state
-            if sum(self.action_mask()) > 1:
-                return self.observation(), 0, self.is_done(), False, None
+            # if sum(self.action_mask()) > 1:
+            #     return self.observation(), 0, self.is_done(), False, None
 
 
         # now calculate the next state and how long it takes to reach that state
@@ -316,6 +408,7 @@ class SMDP_composite:
                 evolution = np.random.choice(events, p=probs)
 
             if evolution == 'arrival': # arrival event
+              
                 if self.track_cycle_times:
                     self.arrival_times[self.total_arrivals] = self.total_time
 
@@ -435,8 +528,7 @@ if __name__ == '__main__':
             total_reward += reward
             time = env.total_time
             steps += 1
-
-              
+        
         print(env.total_arrivals, env.total_time)
         avg_cycle_times.append(np.mean(list(env.cycle_times.values())))
         total_rewards.append(total_reward)
