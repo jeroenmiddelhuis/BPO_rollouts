@@ -249,7 +249,7 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
     if not parallel:
         total_rewards = []
         cycle_times = []
-        for i in tqdm(range(nr_rollouts), desc="Evaluating policy", disable=True):
+        for i in tqdm(range(nr_rollouts), desc="Evaluating policy", disable=False):
             env.reset() # No need to reset the CRN, since we don't use it in this case.
             if nr_arrivals is not None:
                 env.nr_arrivals = nr_arrivals
@@ -264,7 +264,7 @@ def evaluate_policy(env, policy, nr_rollouts=100, nr_arrivals=None, parallel=Fal
         max_parallel_jobs = max(1, int(0.5 * os.cpu_count()))
         with Pool(processes=max_parallel_jobs) as pool:
             result = list(tqdm(pool.imap(evaluate_policy_single_rollout, [(env, policy, nr_arrivals)]*nr_rollouts), 
-                               total=nr_rollouts, disable=True))
+                               total=nr_rollouts, disable=False))
             total_rewards, mean_cycle_times = zip(*result)
         return total_rewards, mean_cycle_times
 

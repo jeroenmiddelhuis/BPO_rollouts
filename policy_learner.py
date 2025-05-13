@@ -7,7 +7,7 @@ import torch.optim as optim
 from sb3_contrib import MaskablePPO
 import copy as cp
 
-
+ 
 class PolicyLearner():    
     CACHE_SIZE = 50000
 
@@ -124,7 +124,7 @@ class PolicyLearner():
             return action_mask
         observation = np.array(observation, dtype=float)
         observation = self.normalize_observation(observation)
-        if len(observation) < 30: # If the observation is small, use the cache
+        if len(observation) < 10: # If the observation is small, use the cache
             action_probs = self.predict_with_cache(observation, action_mask)
         else:
             # Get raw logits from model

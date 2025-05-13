@@ -151,9 +151,11 @@ def show_policy(filename):
         observation = (0, 1, 1, 0, waiting)
         print(observation, pl.predict(observation, [False, True, True, False]), flush=True)
     
-def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, results_dir=None, env_type='smdp', results_string = ''):
+def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, 
+                           results_dir=None, env_type='smdp', results_string = '',
+                           arrival_rate_multiplier=1):
     if config_type == 'composite' or config_type.startswith('scenario'):
-        env = smdp_composite.SMDP_composite(episode_length, config_type)
+        env = smdp_composite.SMDP_composite(episode_length, config_type, arrival_rate_multiplier=arrival_rate_multiplier)
     else:
         env = smdp.SMDP(episode_length, config_type)
     pl_name = None
@@ -181,15 +183,15 @@ def evaluate_single_policy(pl, config_type, episode_length=10, nr_rollouts=300, 
         results_file_path = os.path.join(results_dir, f'{pl_name}_{config_type}.txt')
 
     with open(results_file_path, 'w') as results_file:
-        # results_file.write(f"reward,cycle_time\n")
+        results_file.write(f"reward,cycle_time\n")
         if pl_name in ['pi', 'vi']:
             rewards, cycle_times = rollouts.evaluate_policy(env, pl.policy, nr_rollouts, nr_arrivals=2500, parallel=False)
         else:
-            rewards, cycle_times = rollouts.evaluate_policy(env, pl, nr_rollouts, nr_arrivals=2500, parallel=False)
+            rewards, cycle_times = rollouts.evaluate_policy(env, pl, nr_rollouts, nr_arrivals=2500, parallel=True)
         print(f'Mean reward: {np.mean(rewards)}, std reward: {np.std(rewards)}', flush=True)
         print(f'Mean cycle time: {np.mean(cycle_times)}, std cycle time: {np.std(cycle_times)}', flush=True)
-        # for i in range(nr_rollouts):
-        #     results_file.write(f"{rewards[i]},{cycle_times[i]}\n")
+        for i in range(nr_rollouts):
+            results_file.write(f"{rewards[i]},{cycle_times[i]}\n")
 
 def compare_all_states(filename, episode_length=10, nr_rollouts=100):
     """
@@ -218,79 +220,87 @@ def main():
     """
     Training of the policies
     """
-    nr_rollouts = 100
-    nr_steps_per_rollout = 100
-    config_type = sys.argv[1] if len(sys.argv) > 1 else 'composite'
-    arrival_rate_multiplier = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
-    model_type = 'neural_network'
-    learning_iterations = 20
+    # nr_rollouts = 200
+    # nr_steps_per_rollout = 100
+    # config_type = sys.argv[1] if len(sys.argv) > 1 else 'scenario_1_2'
+    # arrival_rate_multiplier = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
+    # model_type = 'neural_network'
+    # learning_iterations = 20
 
-    if config_type == 'composite':
-        arrival_rate_mult = f'{arrival_rate_multiplier}'
-    else:
-        arrival_rate_mult = ''
+    # if config_type == 'composite':
+    #     arrival_rate_mult = f'{arrival_rate_multiplier}'
+    # else:
+    #     arrival_rate_mult = ''
 
-    dir = f".//models//pi//smdp_composite_no_postpone//{config_type}_{arrival_rate_mult}//"
-    if not os.path.exists(dir):
-        os.makedirs(dir, exist_ok=True)
+    # dir = f".//models//pi//smdp_composite_no_postpone//{config_type}_{arrival_rate_mult}//"
+    # if not os.path.exists(dir):
+    #     os.makedirs(dir, exist_ok=True)
 
-    print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
-    print('Nr rollouts:', nr_rollouts, flush=True)
-    print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
-    print('Arrival rate multiplier:', arrival_rate_multiplier, flush=True)
-    print('Number of CPU cores:', os.cpu_count(), flush=True)
-    print('Number of parallel processes:', max(1, int(0.5 * os.cpu_count())), flush=True)
+    # print('Learning SMDP policy for', config_type, 'with', model_type, 'model', flush=True)
+    # print('Nr rollouts:', nr_rollouts, flush=True)
+    # print('Rollout length:', nr_steps_per_rollout, f'(smdp steps = {nr_steps_per_rollout})', flush=True)
+    # print('Arrival rate multiplier:', arrival_rate_multiplier, flush=True)
+    # print('Number of CPU cores:', os.cpu_count(), flush=True)
+    # print('Number of parallel processes:', max(1, int(0.5 * os.cpu_count())), flush=True)
 
-    learn(config_type,
-        greedy_policy,
-        dir,
-        learning_iterations=learning_iterations,
-        episode_length=1000, # nr_cases
-        nr_states_to_explore=5000,
-        nr_rollouts=nr_rollouts,
-        nr_steps_per_rollout=nr_steps_per_rollout,
-        model_type=model_type,
-        arrival_rate_multiplier=arrival_rate_multiplier)
+    # learn(config_type,
+    #     greedy_policy,
+    #     dir,
+    #     learning_iterations=learning_iterations,
+    #     episode_length=1000, # nr_cases
+    #     nr_states_to_explore=5000,
+    #     nr_rollouts=nr_rollouts,
+    #     nr_steps_per_rollout=nr_steps_per_rollout,
+    #     model_type=model_type,
+    #     arrival_rate_multiplier=arrival_rate_multiplier)
 
 
     """
     Evaluation of the learned policies
     """
 
-    # config_type = 'composite'
-    # arrival_times_multiplier = 0.5
-    # policy = 'pi'
-    # env_type = 'smdp'
+    for arrival_rate_multiplier in [0.8, 1.0]:
+        for policy in ['greedy', 'fifo', 'random']:
 
-    # print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
-    # results_dir = f".//results_test//{policy}//"
-    # os.makedirs(results_dir, exist_ok=True)
+            config_type = 'composite'
+            #arrival_rate_multiplier = 1.0
+            #policy = 'pi'
+            env_type = 'smdp'
 
-    # if config_type == 'composite' or config_type.startswith('scenario'):
-    #     env = smdp_composite.SMDP_composite(2500, config_type, reward_function='AUC', track_cycle_times=True, arrival_rate_multiplier=arrival_times_multiplier)
-    # else:
-    #     env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
-    
-    # if policy == 'greedy':
-    #     pl = greedy_policy
-    # elif policy == 'random':
-    #     pl = random_policy
-    # elif policy == 'fifo':
-    #     pl = fifo_policy
-    # elif policy == 'threshold':
-    #     pl = threshold_policy
-    # elif policy == 'vi':
-    #     filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
-    #     pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
-    # elif policy == 'pi':
-    #     filename = f"./models/pi/{env_type}_composite/{config_type}/{config_type}.best_policy.pth"
-    #     pl = policy_learner.PolicyLearner.load(filename)
-    #     print('Filling cache..', flush=True)
-    #     pl.cache = fill_cache(env, pl)
-    #     print(f'Cache filled with {len(pl.cache)} state-action pairs.', flush=True)
+            print(f'Evaluating policy for {config_type} with {policy} policy trained on an {env_type} environment.')
+            if config_type == 'composite':
+                results_dir = f".//results_composite//{policy}//{config_type}_{arrival_rate_multiplier}//"
+            else:
+                results_dir = f".//results_composite//{policy}//{config_type}//"
+            #results_dir = f".//results_composite//{policy}//"
+            os.makedirs(results_dir, exist_ok=True)
 
-    # evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=1,
-    #                 results_dir=results_dir, env_type=env_type) #, results_string=f'{nr_rollouts}_{nr_steps_per_rollout}_{tau_multiplier}'
+            if config_type == 'composite' or config_type.startswith('scenario'):
+                env = smdp_composite.SMDP_composite(2500, config_type, reward_function='AUC', track_cycle_times=True, arrival_rate_multiplier=arrival_rate_multiplier)
+            else:
+                env = smdp.SMDP(2500, config_type, reward_function='AUC', track_cycle_times=True)
+            
+            if policy == 'greedy':
+                pl = greedy_policy
+            elif policy == 'random':
+                pl = random_policy
+            elif policy == 'fifo':
+                pl = fifo_policy
+            elif policy == 'threshold':
+                pl = threshold_policy
+            elif policy == 'vi':
+                filename = f"./models/vi/{config_type}/{config_type}_policy.npy"
+                pl = policy_learner.ValueIterationPolicy(env, max_queue=100, file=filename)
+            elif policy == 'pi':
+                filename = f"./models/pi/{env_type}_composite/{config_type}/{config_type}.best_policy.pth"
+                pl = policy_learner.PolicyLearner.load(filename)
+                print('Filling cache..', flush=True)
+                pl.cache = fill_cache(env, pl)
+                print(f'Cache filled with {len(pl.cache)} state-action pairs.', flush=True)
+
+            evaluate_single_policy(pl, config_type, episode_length=2500, nr_rollouts=300,
+                            results_dir=results_dir, env_type=env_type, 
+                            arrival_rate_multiplier=arrival_rate_multiplier)
 
 
 if __name__ == '__main__':

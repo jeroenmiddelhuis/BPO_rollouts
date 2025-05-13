@@ -14,3 +14,4 @@ settings.json
 log.txt
 training_data*/
 /models
+results_composite/
